@@ -1,12 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
-import { useEditor } from '../../editor/EditorProvider';
-import { useWorkspace } from '../../editor/workspaceContext';
-import { applyMark, cloneRich, emptyRich, plainText, rangeHasMark } from '../../lib/richtext';
+import { useEditorOptional } from '../../editor/EditorProvider';
+import { useWorkspaceOptional } from '../../editor/workspaceContext';
+import { cloneRich, emptyRich, plainText } from '../../lib/richtext';
 import { collectUsages, valueAsRich, valueAsTable } from '../../lib/syncfields';
 import { useAuth } from '../../store/auth';
-import { renameField, updateFieldValue } from '../../store/fields';
-import type { FieldValue, RichText, SyncField } from '../../types';
-import { IconBold, IconItalic, IconTable, IconX } from '../Icons';
+import { renameField, setFieldFolder, setFieldScope, updateFieldValue } from '../../store/fields';
+import { allFolderPaths, normalizeFolder } from '../../lib/fieldtree';
+import type { FieldScope, FieldValue, RichText, SyncField } from '../../types';
+import { IconTable, IconX } from '../Icons';
 import { RichTextEditor, type RichTextEditorHandle } from './RichTextEditor';
 
 /**
@@ -21,13 +22,23 @@ import { RichTextEditor, type RichTextEditorHandle } from './RichTextEditor';
 export function FieldEditorDialog({
   field,
   onClose,
+  onSaved,
+  allFields,
+  projectId,
 }: {
   field: SyncField;
   onClose: () => void;
+  /** Called after a successful save (used by the external manager). */
+  onSaved?: () => void;
+  /** Field list used to suggest existing folders. */
+  allFields?: SyncField[];
+  /** Project a field falls back into when demoted from global. */
+  projectId?: string | null;
 }) {
-  const { setFields } = useWorkspace();
-  const { state } = useEditor();
+  const ws = useWorkspaceOptional();
+  const state = useEditorOptional()?.state ?? null;
   const { user } = useAuth();
+  const knownFolders = allFolderPaths(allFields ?? ws?.fields ?? []);
 
   const initialTable = valueAsTable(field.value);
   const [name, setName] = useState(field.name);
@@ -40,11 +51,13 @@ export function FieldEditorDialog({
       : null,
   );
   const [busy, setBusy] = useState(false);
+  const [scope, setScope] = useState<FieldScope>(field.scope);
+  const [folder, setFolder] = useState(field.folder);
   const editorRef = useRef<RichTextEditorHandle>(null);
 
   const usageCount = useMemo(
-    () => collectUsages(state.pages).filter((u) => u.fieldId === field.id).length,
-    [state.pages, field.id],
+    () => (state ? collectUsages(state.pages).filter((u) => u.fieldId === field.id).length : 0),
+    [state, field.id],
   );
 
   const isScalar = field.value.kind === 'scalar';
@@ -62,11 +75,29 @@ export function FieldEditorDialog({
       if (name.trim() && name.trim() !== field.name) {
         await renameField(field.id, name.trim());
       }
-      setFields((prev) =>
+      const cleanFolder = normalizeFolder(folder);
+      if (cleanFolder !== field.folder) await setFieldFolder(field.id, cleanFolder);
+      if (scope !== field.scope) {
+        // Demoting to local needs a home project; fall back to the one we
+        // were opened from.
+        await setFieldScope(field.id, scope, projectId ?? field.projectId ?? null);
+      }
+      ws?.setFields((prev) =>
         prev.map((f) =>
-          f.id === field.id ? { ...f, value, name: name.trim() || f.name, updatedBy: user.uid } : f,
+          f.id === field.id
+            ? {
+                ...f,
+                value,
+                name: name.trim() || f.name,
+                folder: cleanFolder,
+                scope,
+                projectId: scope === 'global' ? null : (projectId ?? f.projectId),
+                updatedBy: user.uid,
+              }
+            : f,
         ),
       );
+      onSaved?.();
       onClose();
     } finally {
       setBusy(false);
@@ -94,37 +125,6 @@ export function FieldEditorDialog({
       t && nCols > 1 ? { ...t, rows: t.rows.map((row) => row.filter((_, i) => i !== c)) } : t,
     );
 
-  const markToolbar = (
-    <>
-      <button
-        className="icon-btn"
-        title="Bold"
-        aria-label="Bold"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => {
-          const r = editorRef.current?.getRange();
-          if (!r || r.start === r.end) return;
-          setRich((cur) => applyMark(cur, r, { bold: !rangeHasMark(cur, r, 'bold') }));
-        }}
-      >
-        <IconBold size={13} />
-      </button>
-      <button
-        className="icon-btn"
-        title="Italic"
-        aria-label="Italic"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => {
-          const r = editorRef.current?.getRange();
-          if (!r || r.start === r.end) return;
-          setRich((cur) => applyMark(cur, r, { italic: !rangeHasMark(cur, r, 'italic') }));
-        }}
-      >
-        <IconItalic size={13} />
-      </button>
-    </>
-  );
-
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: table ? 780 : 520 }}>
@@ -148,16 +148,62 @@ export function FieldEditorDialog({
         <p className="muted text-xs" style={{ marginBottom: 16 }}>
           Saving updates the field itself — every document that embeds it follows immediately.
           {usageCount > 0 && ` Used ${usageCount}× in this document.`}
+          {scope !== field.scope &&
+            (scope === 'global'
+              ? ' Making it global shares it with every project in the space.'
+              : ' Making it project-only hides it from other projects.')}
         </p>
 
+        <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '2 1 200px' }}>
+            <label htmlFor="fe-name">Field name</label>
+            <input
+              id="fe-name"
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div className="field" style={{ flex: '1 1 150px' }}>
+            <label>Scope</label>
+            <div className="segmented">
+              {(['local', 'global'] as FieldScope[]).map((sc) => (
+                <button
+                  key={sc}
+                  type="button"
+                  className={scope === sc ? 'active' : ''}
+                  onClick={() => setScope(sc)}
+                  title={
+                    sc === 'local'
+                      ? 'Only this project can use it'
+                      : 'Every project in the space can use it'
+                  }
+                >
+                  {sc === 'local' ? 'Project' : 'Global'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="field" style={{ marginBottom: 14 }}>
-          <label htmlFor="fe-name">Field name</label>
+          <label htmlFor="fe-folder">Folder</label>
           <input
-            id="fe-name"
+            id="fe-folder"
             className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
+            list="fe-folder-list"
+            placeholder="Root — or e.g. Pricing/2026"
+            value={folder}
+            onChange={(e) => setFolder(e.target.value)}
           />
+          <datalist id="fe-folder-list">
+            {knownFolders.map((f) => (
+              <option key={f} value={f} />
+            ))}
+          </datalist>
+          <span className="muted text-xs">
+            Use “/” to nest. Leave empty to keep the field at the root.
+          </span>
         </div>
 
         {table ? (
@@ -237,13 +283,12 @@ export function FieldEditorDialog({
               ref={editorRef}
               value={rich}
               onChange={setRich}
-              toolbar={isScalar ? undefined : markToolbar}
               compact={isScalar}
             />
             <p className="muted text-xs" style={{ marginTop: 4 }}>
-              {isScalar
-                ? 'Plain value — formatting is not stored for this field.'
-                : 'Nested fields inside this value keep syncing from their own definitions.'}
+              Plain content only — bold, italic and colour come from the block that embeds this
+              field, never from the field itself.
+              {!isScalar && ' Nested fields keep syncing from their own definitions.'}
             </p>
           </div>
         )}

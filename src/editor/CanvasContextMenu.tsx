@@ -2,21 +2,18 @@ import { useNavigate } from 'react-router-dom';
 import { ContextMenu, type MenuItem } from '../components/ContextMenu';
 import { useDialog } from '../components/Dialog';
 import {
-  IconAlignCenter,
-  IconAlignLeft,
-  IconAlignRight,
-  IconBold,
   IconCopy,
   IconImage,
-  IconItalic,
   IconLink,
   IconMessage,
   IconPencil,
+  IconPlus,
   IconTable,
   IconTrash,
   IconType,
   IconUnlink,
 } from '../components/Icons';
+import { blockTarget, fieldShapeLabel, partitionByFit } from '../lib/fieldtypes';
 import {
   applyMark,
   plainText,
@@ -27,7 +24,7 @@ import {
 } from '../lib/richtext';
 import { collectUsages, locateSpan, valueAsRich } from '../lib/syncfields';
 import { deleteField as deleteFieldRow, renameField } from '../store/fields';
-import type { Block, RichText, SyncDirection, TextAlign, TextSize } from '../types';
+import type { Block, RichText, SyncDirection, SyncField, TextAlign, TextSize } from '../types';
 import { useEditor } from './EditorProvider';
 import { useFieldOps } from './useFieldOps';
 import { useWorkspace } from './workspaceContext';
@@ -50,6 +47,33 @@ const DIRECTIONS: { dir: SyncDirection; label: string; hint: string }[] = [
   { dir: 'two-way', label: '⇅ Two-way', hint: 'both' },
 ];
 
+
+/** Field rows grouped by scope, so long lists stay organised. */
+function fieldItems(
+  list: SyncField[],
+  onPick: (f: SyncField) => void,
+  disabled = false,
+): MenuItem[] {
+  const out: MenuItem[] = [];
+  for (const scope of ['global', 'local'] as const) {
+    const scoped = list.filter((f) =>
+      scope === 'global' ? f.scope === 'global' : f.scope !== 'global',
+    );
+    if (scoped.length === 0) continue;
+    out.push({ kind: 'note', label: scope === 'global' ? 'Global' : 'This project' });
+    for (const f of scoped) {
+      out.push({
+        kind: 'item',
+        label: f.folder ? `${f.folder}/${f.name}` : f.name,
+        hint: fieldShapeLabel(f.value),
+        disabled,
+        onSelect: () => onPick(f),
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Right-click menu for the page surface. Covers the whole sync-field
  * workflow — create, bind, nest (narrow), re-direct, unlink, rename,
@@ -59,13 +83,16 @@ const DIRECTIONS: { dir: SyncDirection; label: string; hint: string }[] = [
 export function CanvasContextMenu({
   target,
   onClose,
+  onEditField,
 }: {
   target: CanvasTarget;
   onClose: () => void;
+  onEditField: (field: SyncField) => void;
 }) {
   const { state, dispatch, readOnly, currentPage } = useEditor();
   const { doc, masterDoc, fields, fieldMap, setFields, setActiveSpan, setTab } = useWorkspace();
-  const { bindRange, defaultDirection } = useFieldOps();
+  const { bindRange, insertField, bindBlockToField, createFieldFromBlock, defaultDirection } =
+    useFieldOps();
   const dialog = useDialog();
   const navigate = useNavigate();
 
@@ -85,6 +112,7 @@ export function CanvasContextMenu({
   const getBodyRich = (): RichText | null => (block?.type === 'text' ? block.body : null);
 
   const setBody = (rich: RichText) => patch({ body: rich } as Partial<Block>);
+
 
   /* ---------- Field-span section ---------- */
 
@@ -106,6 +134,16 @@ export function CanvasContextMenu({
         sub: preview ? `“${preview.slice(0, 44)}${preview.length > 44 ? '…' : ''}”` : undefined,
       },
     ];
+
+    if (field) {
+      items.push({
+        kind: 'item',
+        label: 'Edit field value…',
+        hint: 'isolated',
+        icon: <IconPencil size={13} />,
+        onSelect: () => onEditField(field),
+      });
+    }
 
     if (!readOnly) {
       items.push({
@@ -219,12 +257,19 @@ export function CanvasContextMenu({
     if (readOnly || !rich || bodyLocked) return [];
     const range = target.range;
     const hasSel = !!range && range.start !== range.end;
+    /** With no caret (block not being edited), append to the end. */
+    const caretFallback = (): TextRange => {
+      const last = Math.max(0, rich.length - 1);
+      const len = plainText([rich[last] ?? []]).length;
+      return { para: last, start: len, end: len };
+    };
 
     const items: MenuItem[] = [];
 
     // Only offer a top-level field bind when not already inside a span
     // (inside one, "Narrow" above is the right action).
     if (!target.fieldId) {
+      const { fits, unfit } = partitionByFit(fields, 'inline');
       items.push({
         kind: 'submenu',
         label: 'Make sync field',
@@ -238,20 +283,42 @@ export function CanvasContextMenu({
               void bindRange(rich, range).then((next) => next && setBody(next));
             },
           },
-          ...(fields.length
-            ? ([{ kind: 'separator' }] as MenuItem[]).concat(
-                fields.map((f) => ({
-                  kind: 'item' as const,
-                  label: f.name,
-                  hint: 'bind',
-                  onSelect: () => {
-                    void bindRange(rich, range, { fieldId: f.id }).then(
-                      (next) => next && setBody(next),
-                    );
-                  },
-                })),
-              )
+          ...(fits.length ? ([{ kind: 'separator' }] as MenuItem[]) : []),
+          ...fieldItems(fits, (f) => {
+            void bindRange(rich, range, { fieldId: f.id }).then((next) => next && setBody(next));
+          }),
+          ...(unfit.length
+            ? ([{ kind: 'separator' }, { kind: 'note', label: 'Not usable inline' }] as MenuItem[])
             : []),
+          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
+        ],
+      });
+    }
+
+    // Insert an existing field at the caret — its own value supplies the
+    // text, so no selection is required.
+    {
+      const { fits, unfit } = partitionByFit(fields, 'inline');
+      items.push({
+        kind: 'submenu',
+        label: 'Insert sync field here',
+        icon: <IconPlus size={13} />,
+        disabled: fields.length === 0,
+        items: [
+          ...(fits.length
+            ? fieldItems(fits, (f) => {
+                void insertField(rich, range ?? caretFallback(), f.id, {
+                  target: 'inline',
+                }).then((next) => next && setBody(next));
+              })
+            : ([{ kind: 'note', label: 'No inline-compatible fields yet.' }] as MenuItem[])),
+          ...(unfit.length
+            ? ([
+                { kind: 'separator' },
+                { kind: 'note', label: 'Wrong shape for inline text' },
+              ] as MenuItem[])
+            : []),
+          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
         ],
       });
     }
@@ -325,13 +392,7 @@ export function CanvasContextMenu({
       items.push({
         kind: 'submenu',
         label: 'Align',
-        items: (
-          [
-            ['left', IconAlignLeft],
-            ['center', IconAlignCenter],
-            ['right', IconAlignRight],
-          ] as [TextAlign, typeof IconAlignLeft][]
-        ).map(([a, Icon]) => ({
+        items: (['left', 'center', 'right'] as TextAlign[]).map((a) => ({
           kind: 'check' as const,
           label: a[0].toUpperCase() + a.slice(1),
           checked: (block.type === 'text' ? (block.align ?? 'left') : 'left') === a,
@@ -360,6 +421,18 @@ export function CanvasContextMenu({
           onSelect: () => patch({ binding: { ...blockBinding, direction: d.dir } }),
         })),
       });
+      if (blockBinding.fieldId) {
+        const bf = fieldMap.get(blockBinding.fieldId);
+        if (bf) {
+          items.push({
+            kind: 'item',
+            label: 'Edit field value…',
+            hint: 'isolated',
+            icon: <IconPencil size={13} />,
+            onSelect: () => onEditField(bf),
+          });
+        }
+      }
       items.push({
         kind: 'item',
         label: 'Unlink whole block',
@@ -367,19 +440,44 @@ export function CanvasContextMenu({
         icon: <IconUnlink size={13} />,
         onSelect: () => patch({ binding: undefined }),
       });
-    } else if (!readOnly && isText && doc.kind === 'master' && block.type === 'text') {
+    } else if (!readOnly && (block.type === 'text' || block.type === 'table')) {
+      // Unbound block: promote it to a field, or bind it to an existing
+      // one of the matching shape.
+      const bt = blockTarget(block)!;
+      const { fits, unfit } = partitionByFit(fields, bt);
       items.push({ kind: 'separator' });
       items.push({
         kind: 'item',
-        label: 'Bind whole block to a new field',
-        icon: <IconLink size={13} />,
+        label: block.type === 'table' ? 'Make this table a sync field' : 'Make this block a sync field',
+        icon: block.type === 'table' ? <IconTable size={13} /> : <IconLink size={13} />,
         onSelect: () => {
-          void bindRange(
-            block.body,
-            { para: 0, start: 0, end: plainText([block.body[0] ?? []]).length },
-            {},
-          ).then((next) => next && setBody(next));
+          void createFieldFromBlock(block).then((p) => p && patch(p));
         },
+      });
+      items.push({
+        kind: 'submenu',
+        label: 'Bind block to existing field',
+        icon: <IconLink size={13} />,
+        disabled: fields.length === 0,
+        items: [
+          ...(fits.length
+            ? fieldItems(fits, (f) => {
+                void bindBlockToField(block, f.id).then((p) => p && patch(p));
+              })
+            : ([
+                {
+                  kind: 'note',
+                  label:
+                    block.type === 'table'
+                      ? 'No table fields yet — make one from a table first.'
+                      : 'No text fields available.',
+                },
+              ] as MenuItem[])),
+          ...(unfit.length
+            ? ([{ kind: 'separator' }, { kind: 'note', label: 'Wrong shape for this block' }] as MenuItem[])
+            : []),
+          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
+        ],
       });
     }
 

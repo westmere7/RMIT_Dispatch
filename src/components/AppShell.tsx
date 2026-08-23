@@ -1,7 +1,7 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import { useSpaces } from '../store/spaces';
-import { IconBell, IconGrid, IconLogout, IconSearch, IconUsers } from './Icons';
+import { IconBell, IconGrid, IconLink, IconLogout, IconSearch, IconUsers } from './Icons';
 import { RoleBadge } from './RoleBadge';
 import { SpaceSwitcher } from './SpaceSwitcher';
 import { ThemeToggle } from './ThemeToggle';
@@ -47,12 +47,20 @@ export function AppShell() {
               R
             </Link>
             <button
-              className={`rail-btn ${!isWorkspace && location.pathname !== '/space' ? 'active' : ''}`}
+              className={`rail-btn ${!isWorkspace && location.pathname !== '/space' && location.pathname !== '/fields' ? 'active' : ''}`}
               data-tip="Projects"
               aria-label="Projects"
               onClick={() => navigate('/')}
             >
               <IconGrid size={19} />
+            </button>
+            <button
+              className={`rail-btn ${location.pathname === '/fields' ? 'active' : ''}`}
+              data-tip="Sync fields"
+              aria-label="Sync fields"
+              onClick={() => navigate('/fields')}
+            >
+              <IconLink size={19} />
             </button>
             <button
               className={`rail-btn ${location.pathname === '/space' ? 'active' : ''}`}

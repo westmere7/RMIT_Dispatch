@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { isConfigured } from './lib/supabase';
+import { GlobalFields } from './pages/GlobalFields';
 import { Login } from './pages/Login';
 import { NotConfigured } from './pages/NotConfigured';
 import { NotFound } from './pages/NotFound';
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/" element={<Projects />} />
         <Route path="/projects/:projectId" element={<ProjectView />} />
         <Route path="/docs/:documentId" element={<Workspace />} />
+        <Route path="/fields" element={<GlobalFields />} />
         <Route path="/space" element={<SpaceSettings />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<NotFound />} />

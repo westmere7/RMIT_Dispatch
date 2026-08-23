@@ -318,6 +318,11 @@ export function useEditor(): EditorCtx {
   return ctx;
 }
 
+/** For components shared with pages that have no editor mounted. */
+export function useEditorOptional(): EditorCtx | null {
+  return useContext(Ctx);
+}
+
 const SAVE_DEBOUNCE_MS = 600;
 const BROADCAST_DEBOUNCE_MS = 250;
 

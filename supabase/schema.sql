@@ -95,14 +95,44 @@ create table if not exists public.versions (
   snapshot        jsonb not null
 );
 
+-- Sync fields are either LOCAL to one project or GLOBAL to a whole space
+-- (shared by every project in it). space_id is always set so policies and
+-- realtime filters need only one column. `folder` is a '/'-separated path
+-- used purely for organisation.
 create table if not exists public.sync_fields (
   id         uuid primary key default gen_random_uuid(),
-  project_id uuid not null references public.projects (id) on delete cascade,
+  project_id uuid references public.projects (id) on delete cascade,
+  space_id   uuid references public.spaces (id) on delete cascade,
+  scope      text not null default 'local' check (scope in ('local', 'global')),
+  folder     text not null default '',
   name       text not null,
   value      jsonb not null,
   updated_at timestamptz not null default now(),
   updated_by uuid
 );
+
+-- Upgrade an existing installation in place.
+alter table public.sync_fields add column if not exists space_id uuid references public.spaces (id) on delete cascade;
+alter table public.sync_fields add column if not exists scope  text not null default 'local';
+alter table public.sync_fields add column if not exists folder text not null default '';
+alter table public.sync_fields alter column project_id drop not null;
+
+-- Backfill space_id for rows created before the column existed.
+update public.sync_fields f
+   set space_id = p.space_id
+  from public.projects p
+ where f.project_id = p.id and f.space_id is null;
+
+do $$
+begin
+  alter table public.sync_fields
+    add constraint sync_fields_scope_shape
+    check (
+      (scope = 'local'  and project_id is not null) or
+      (scope = 'global' and project_id is null)
+    );
+exception when duplicate_object then null;
+end $$;
 
 create table if not exists public.comments (
   id          uuid primary key default gen_random_uuid(),
@@ -122,6 +152,8 @@ create index if not exists idx_documents_project  on public.documents (project_i
 create index if not exists idx_documents_parent   on public.documents (parent_id);
 create index if not exists idx_versions_document  on public.versions (document_id);
 create index if not exists idx_sync_fields_project on public.sync_fields (project_id);
+create index if not exists idx_sync_fields_space   on public.sync_fields (space_id);
+create index if not exists idx_sync_fields_scope   on public.sync_fields (space_id, scope);
 create index if not exists idx_comments_document  on public.comments (document_id);
 
 -- ---------- updated_at triggers ----------
@@ -343,24 +375,25 @@ create policy versions_insert on public.versions
     public.can_edit_space(public.document_space(document_id)) and created_by = auth.uid()
   );
 
--- sync_fields
+-- sync_fields: keyed on space_id (always set), so one rule covers both
+-- local and global fields.
 drop policy if exists sync_fields_select on public.sync_fields;
 create policy sync_fields_select on public.sync_fields
-  for select to authenticated using (public.is_space_member(public.project_space(project_id)));
+  for select to authenticated using (public.is_space_member(space_id));
 
 drop policy if exists sync_fields_insert on public.sync_fields;
 create policy sync_fields_insert on public.sync_fields
-  for insert to authenticated with check (public.can_edit_space(public.project_space(project_id)));
+  for insert to authenticated with check (public.can_edit_space(space_id));
 
 drop policy if exists sync_fields_update on public.sync_fields;
 create policy sync_fields_update on public.sync_fields
   for update to authenticated
-  using (public.can_edit_space(public.project_space(project_id)))
-  with check (public.can_edit_space(public.project_space(project_id)));
+  using (public.can_edit_space(space_id))
+  with check (public.can_edit_space(space_id));
 
 drop policy if exists sync_fields_delete on public.sync_fields;
 create policy sync_fields_delete on public.sync_fields
-  for delete to authenticated using (public.can_edit_space(public.project_space(project_id)));
+  for delete to authenticated using (public.can_edit_space(space_id));
 
 -- comments: every member (designers included) can comment and resolve;
 -- authors and admins can delete.

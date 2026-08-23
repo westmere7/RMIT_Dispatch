@@ -38,12 +38,12 @@ import {
   releaseLock,
 } from '../store/documents';
 import { fetchDraft, saveDraft } from '../store/drafts';
-import { fetchFields, updateFieldValue } from '../store/fields';
+import { fetchFieldsForProject, updateFieldValue } from '../store/fields';
 import { fetchProject } from '../store/projects';
 import {
   subscribeDocument,
   subscribeDraft,
-  subscribeProjectFields,
+  subscribeSpaceFields,
   type DraftPatch,
   type PresenceUser,
 } from '../store/realtime';
@@ -86,10 +86,15 @@ export function Workspace() {
         if (!cancelled) setMissing(true);
         return;
       }
-      const [project, draft, fields] = await Promise.all([
-        fetchProject(doc.projectId),
+      const project = await fetchProject(doc.projectId);
+      if (!project) {
+        if (!cancelled) setMissing(true);
+        return;
+      }
+      const [draft, fields] = await Promise.all([
         fetchDraft(doc.id),
-        fetchFields(doc.projectId),
+        // Local fields of this project plus the space's global ones.
+        fetchFieldsForProject(doc.projectId, project.spaceId),
       ]);
       let masterDoc: DispatchDocument | null = null;
       let masterPages: Page[] | null = null;
@@ -97,7 +102,7 @@ export function Workspace() {
         masterDoc = await fetchDocument(doc.parentId);
         if (masterDoc) masterPages = (await fetchDraft(masterDoc.id))?.pages ?? [];
       }
-      if (!project || cancelled) return;
+      if (cancelled) return;
       setLoaded({ doc, project, pages: draft?.pages ?? [], fields, masterDoc, masterPages });
     })();
     return () => {
@@ -341,17 +346,23 @@ function WorkspaceInner({
 
   /* ---------- Realtime: project fields ---------- */
   useEffect(() => {
-    const unsub = subscribeProjectFields(project.id, (event, field, oldId) => {
+    const unsub = subscribeSpaceFields(project.spaceId, (event, field, oldId) => {
       setFields((prev) => {
         if (event === 'DELETE') return prev.filter((f) => f.id !== oldId);
         if (!field) return prev;
+        // Keep only what this project can see: its own local fields and
+        // every global field in the space.
+        const relevant = field.scope === 'global' || field.projectId === project.id;
         const without = prev.filter((f) => f.id !== field.id);
-        return [...without, field].sort((a, b) => a.name.localeCompare(b.name));
+        if (!relevant) return without;
+        return [...without, field].sort(
+          (a, b) => a.folder.localeCompare(b.folder) || a.name.localeCompare(b.name),
+        );
       });
     });
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  }, [project.id, project.spaceId]);
 
   /* ---------- Realtime: master draft (adaptations follow live) ---------- */
   useEffect(() => {

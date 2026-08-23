@@ -29,12 +29,15 @@ import {
   IconCopy,
   IconItalic,
   IconLink,
+  IconPlus,
   IconSendBack,
   IconTrash,
 } from '../Icons';
+import { useFieldOps } from '../../editor/useFieldOps';
 import { useDialog } from '../Dialog';
 import { CommentThread } from './CommentThread';
 import { FieldMenu } from './FieldMenu';
+import { FieldPicker } from './FieldPicker';
 import { RichTextEditor, type RichTextEditorHandle } from './RichTextEditor';
 import { SyncPanel } from './SyncPanel';
 import { VersionPanel } from './VersionPanel';
@@ -403,6 +406,7 @@ function TableProps({
   const { user } = useAuth();
   const [cell, setCell] = useState<{ r: number; c: number }>({ r: 0, c: 0 });
   const cellEditorRef = useRef<RichTextEditorHandle>(null);
+  const { insertField, checkFit } = useFieldOps();
 
   const nRows = block.rows.length;
   const nCols = block.rows[0]?.length ?? 0;
@@ -457,11 +461,18 @@ function TableProps({
   const bindCell = async (fieldId: string, createNew: boolean) => {
     if (!user) return;
     const direction: SyncDirection = doc.kind === 'master' ? 'two-way' : 'down';
+    if (!createNew) {
+      const f = fieldMap.get(fieldId);
+      // A table field owns a whole table; it can't live in one cell.
+      if (!f || !(await checkFit(f, 'tableCell'))) return;
+    }
     if (createNew) {
       const name = autoFieldName(plainText(current), new Set(fields.map((f) => f.name)));
       const field = await createField({
         id: fieldId,
         projectId: project.id,
+        spaceId: project.spaceId,
+        scope: 'local',
         name,
         value: { kind: 'richtext', rich: current },
         userId: user.uid,
@@ -481,7 +492,6 @@ function TableProps({
     } as Partial<Block>);
   };
 
-  const [bindMenu, setBindMenu] = useState(false);
 
   return (
     <>
@@ -604,36 +614,32 @@ function TableProps({
                 </button>
               </>
             ) : (
-              <>
-                <button className="btn btn-sm" onClick={() => setBindMenu((o) => !o)}>
-                  <IconLink size={12} /> Bind cell to field
-                </button>
-                {bindMenu && (
-                  <div className="space-switcher-menu" style={{ left: 0, right: 'auto', top: '100%' }}>
-                    <button
-                      className="menu-item"
-                      onClick={() => {
-                        void bindCell(uuid(), true);
-                        setBindMenu(false);
-                      }}
-                    >
-                      ＋ New field from cell
-                    </button>
-                    {fields.map((f) => (
-                      <button
-                        key={f.id}
-                        className="menu-item"
-                        onClick={() => {
-                          void bindCell(f.id, false);
-                          setBindMenu(false);
-                        }}
-                      >
-                        {f.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </>
+              <FieldPicker
+                fields={fields}
+                target="tableCell"
+                label="Bind cell to field"
+                icon={<IconLink size={12} />}
+                compact
+                createLabel="New field from cell"
+                onCreate={() => void bindCell(uuid(), true)}
+                onPick={(f) => void bindCell(f.id, false)}
+              />
+            )}
+            {/* Insert a field inside the cell's text, rather than owning
+                the whole cell. */}
+            {!boundDown && (
+              <FieldPicker
+                fields={fields}
+                target="tableCell"
+                label="Insert in cell"
+                icon={<IconPlus size={12} />}
+                compact
+                onPick={(f) => {
+                  void insertField(current, cellEditorRef.current?.getRange() ?? null, f.id, {
+                    target: 'tableCell',
+                  }).then((next) => next && setCurrentCell(next));
+                }}
+              />
             )}
           </div>
         )}

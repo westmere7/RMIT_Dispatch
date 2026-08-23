@@ -8,12 +8,13 @@ import {
   IconZoomIn,
   IconZoomOut,
 } from '../components/Icons';
+import { FieldEditorDialog } from '../components/editor/FieldEditorDialog';
 import { FieldMenu } from '../components/editor/FieldMenu';
 import type { InlineEditorHandle } from '../components/editor/InlineTextEditor';
 import { canvasAspect } from '../grid/presets';
 import { applyMark, rangeHasMark } from '../lib/richtext';
 import { useSize } from '../lib/useSize';
-import type { RichText, TextAlign, TextSize } from '../types';
+import type { RichText, SyncField, TextAlign, TextSize } from '../types';
 import type { SpanClickInfo } from './BlockFrame';
 import { CanvasContextMenu, type CanvasTarget } from './CanvasContextMenu';
 import { useEditor } from './EditorProvider';
@@ -42,6 +43,7 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
   const inlineRef = useRef<InlineEditorHandle>(null);
   const [zoom, setZoom] = useState(1);
   const [menu, setMenu] = useState<CanvasTarget | null>(null);
+  const [fieldEdit, setFieldEdit] = useState<SyncField | null>(null);
   const { onBlockPointerDown, onHandlePointerDown } = useDragResize(surfaceRef);
 
   const editingId = state.editingBlockId;
@@ -307,7 +309,16 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
         )}
       </div>
 
-      {menu && <CanvasContextMenu target={menu} onClose={() => setMenu(null)} />}
+      {menu && (
+        <CanvasContextMenu
+          target={menu}
+          onClose={() => setMenu(null)}
+          onEditField={(f) => setFieldEdit(f)}
+        />
+      )}
+      {fieldEdit && (
+        <FieldEditorDialog field={fieldEdit} onClose={() => setFieldEdit(null)} />
+      )}
 
       <div className="zoom-dock">
         <button className="icon-btn" onClick={zoomOut} aria-label="Zoom out" title="Zoom out">

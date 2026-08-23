@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { IconCheck, IconChevronRight } from './Icons';
 
 export type MenuItem =
@@ -25,8 +32,127 @@ export type MenuItem =
   | { kind: 'separator' };
 
 const MENU_W = 232;
+const CLOSE_GRACE_MS = 160;
 
-/** One menu panel; submenus recurse. */
+/**
+ * A floating panel positioned in viewport coordinates and clamped on
+ * screen. Used for the root menu and, via a portal, for every submenu —
+ * portalling is what keeps submenus from being clipped by the root
+ * panel's own scroll container.
+ */
+function FloatingPanel({
+  left,
+  top,
+  children,
+  onMouseEnter,
+  onMouseLeave,
+  panelRef,
+}: {
+  left: number;
+  top: number;
+  children: ReactNode;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  panelRef?: React.RefObject<HTMLDivElement>;
+}) {
+  const innerRef = useRef<HTMLDivElement>(null);
+  const ref = panelRef ?? innerRef;
+  const [pos, setPos] = useState({ left, top });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      left: Math.max(6, Math.min(left, window.innerWidth - r.width - 6)),
+      top: Math.max(6, Math.min(top, window.innerHeight - r.height - 6)),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [left, top]);
+
+  return (
+    <div
+      ref={ref}
+      className="ctx-float"
+      data-ctx-portal="1"
+      style={{ left: pos.left, top: pos.top }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** A submenu row plus its portalled child panel. */
+function SubmenuRow({
+  item,
+  onClose,
+  depth,
+}: {
+  item: Extract<MenuItem, { kind: 'submenu' }>;
+  onClose: () => void;
+  depth: number;
+}) {
+  const rowRef = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
+  const timer = useRef<number | null>(null);
+
+  const cancelClose = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  // A grace period so the pointer can travel from the row to the panel.
+  const scheduleClose = () => {
+    cancelClose();
+    timer.current = window.setTimeout(() => setAnchor(null), CLOSE_GRACE_MS);
+  };
+  useEffect(() => cancelClose, []);
+
+  const open = () => {
+    cancelClose();
+    const r = rowRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({ left: r.right - 4, top: r.top - 5 });
+  };
+
+  return (
+    <>
+      <button
+        ref={rowRef}
+        className={`ctx-row ${item.disabled ? 'disabled' : ''} ${anchor ? 'open' : ''}`}
+        disabled={item.disabled}
+        role="menuitem"
+        aria-haspopup="true"
+        aria-expanded={!!anchor}
+        onMouseEnter={() => !item.disabled && open()}
+        onMouseLeave={scheduleClose}
+        onClick={() => !item.disabled && (anchor ? setAnchor(null) : open())}
+      >
+        {item.icon && <span className="ctx-icon">{item.icon}</span>}
+        <span className="ctx-label">{item.label}</span>
+        <IconChevronRight size={13} />
+      </button>
+      {anchor &&
+        !item.disabled &&
+        createPortal(
+          <FloatingPanel
+            left={anchor.left}
+            top={anchor.top}
+            onMouseEnter={cancelClose}
+            onMouseLeave={scheduleClose}
+          >
+            <Panel items={item.items} onClose={onClose} depth={depth + 1} />
+          </FloatingPanel>,
+          document.body,
+        )}
+    </>
+  );
+}
+
 function Panel({
   items,
   onClose,
@@ -36,8 +162,6 @@ function Panel({
   onClose: () => void;
   depth?: number;
 }) {
-  const [openSub, setOpenSub] = useState<number | null>(null);
-
   return (
     <div className="ctx-panel" style={{ minWidth: MENU_W }} role="menu">
       {items.map((it, i) => {
@@ -58,32 +182,7 @@ function Panel({
           );
         }
         if (it.kind === 'submenu') {
-          const open = openSub === i;
-          return (
-            <div
-              key={i}
-              className="ctx-row-wrap"
-              onMouseEnter={() => setOpenSub(i)}
-              onMouseLeave={() => setOpenSub((c) => (c === i ? null : c))}
-            >
-              <button
-                className={`ctx-row ${it.disabled ? 'disabled' : ''}`}
-                disabled={it.disabled}
-                role="menuitem"
-                aria-haspopup="true"
-                aria-expanded={open}
-              >
-                {it.icon && <span className="ctx-icon">{it.icon}</span>}
-                <span className="ctx-label">{it.label}</span>
-                <IconChevronRight size={13} />
-              </button>
-              {open && !it.disabled && (
-                <div className="ctx-sub" style={{ left: MENU_W - 6 }}>
-                  <Panel items={it.items} onClose={onClose} depth={depth + 1} />
-                </div>
-              )}
-            </div>
-          );
+          return <SubmenuRow key={i} item={it} onClose={onClose} depth={depth} />;
         }
         const checked = it.kind === 'check' && it.checked;
         return (
@@ -114,7 +213,7 @@ function Panel({
   );
 }
 
-/** Right-click menu anchored at viewport coordinates, clamped on screen. */
+/** Right-click menu anchored at viewport coordinates. */
 export function ContextMenu({
   x,
   y,
@@ -126,21 +225,13 @@ export function ContextMenu({
   items: MenuItem[];
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ left: x, top: y });
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6));
-    const top = Math.max(6, Math.min(y, window.innerHeight - r.height - 6));
-    setPos({ left, top });
-  }, [x, y, items]);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      // Submenus live in portals outside this subtree, so test the whole
+      // menu family rather than just the root element.
+      if (!(e.target as HTMLElement).closest('[data-ctx-portal]')) onClose();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -148,7 +239,6 @@ export function ContextMenu({
         onClose();
       }
     };
-    // Capture so the canvas' own Escape handler doesn't also fire.
     window.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('resize', onClose);
@@ -160,13 +250,8 @@ export function ContextMenu({
   }, [onClose]);
 
   return (
-    <div
-      ref={ref}
-      className="ctx-root"
-      style={{ left: pos.left, top: pos.top }}
-      onContextMenu={(e) => e.preventDefault()}
-    >
+    <FloatingPanel left={x} top={y} panelRef={rootRef}>
       <Panel items={items} onClose={onClose} />
-    </div>
+    </FloatingPanel>
   );
 }

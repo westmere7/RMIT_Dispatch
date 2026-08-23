@@ -102,15 +102,19 @@ export function subscribeDocument(args: {
   };
 }
 
-/** Per-project channel: sync_fields changes (downstream propagation). */
-export function subscribeProjectFields(
-  projectId: string,
+/**
+ * Space-wide sync_fields channel. Filtering on space_id catches both
+ * local and global fields in one subscription (space_id is set on both);
+ * the caller decides which rows are relevant to its project.
+ */
+export function subscribeSpaceFields(
+  spaceId: string,
   onFieldEvent: (event: RowEvent, field: SyncField | null, oldId: string | null) => void,
 ): () => void {
-  const channel = supabase.channel(`proj:${projectId}`);
+  const channel = supabase.channel(`space-fields:${spaceId}`);
   channel.on(
     'postgres_changes',
-    { event: '*', schema: 'public', table: 'sync_fields', filter: `project_id=eq.${projectId}` },
+    { event: '*', schema: 'public', table: 'sync_fields', filter: `space_id=eq.${spaceId}` },
     (payload) => {
       const event = payload.eventType as RowEvent;
       const row = event === 'DELETE' ? null : (payload.new as Record<string, unknown>);

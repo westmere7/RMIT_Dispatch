@@ -200,9 +200,17 @@ export type FieldValue =
   /** A whole table owned by the field: header flag plus every cell. */
   | { kind: 'table'; headerRow: boolean; rows: RichText[][] };
 
+/** Where a field lives: one project, or every project in the space. */
+export type FieldScope = 'local' | 'global';
+
 export interface SyncField {
   id: string;
-  projectId: string;
+  /** Null for global fields. */
+  projectId: string | null;
+  spaceId: string;
+  scope: FieldScope;
+  /** '/'-separated organisation path; '' means the root. */
+  folder: string;
   name: string;
   value: FieldValue;
   updatedAt: string;

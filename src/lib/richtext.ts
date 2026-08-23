@@ -234,6 +234,78 @@ export function wrapField(
   return { rich: out, parentFieldId, parentRel, text: nodesText(children), children };
 }
 
+/**
+ * Insert a field span at a caret (collapsed range) or in place of the
+ * selected text. Mirrors wrapField's return shape: when the insertion
+ * point sits inside an existing span, the caller must mirror the same
+ * insert into that field's canonical value.
+ */
+export function insertFieldAt(
+  rich: RichText,
+  range: TextRange,
+  fieldId: string,
+  direction: SyncDirection,
+  children: InlineNode[],
+):
+  | {
+      rich: RichText;
+      parentFieldId?: string;
+      parentRel?: { start: number; end: number };
+    }
+  | null {
+  const out = cloneRich(rich);
+  const para = out[range.para];
+  if (!para) return null;
+
+  const enclosing = findEnclosingSpan(para, range.start, range.end);
+  let targetNodes = para;
+  let start = range.start;
+  let end = range.end;
+  let parentFieldId: string | undefined;
+  let parentRel: { start: number; end: number } | undefined;
+
+  if (enclosing) {
+    targetNodes = enclosing.span.children;
+    start = enclosing.relStart;
+    end = enclosing.relEnd;
+    parentFieldId = enclosing.span.fieldId;
+    parentRel = { start, end };
+  }
+
+  const ex = extractNodes(targetNodes, start, end);
+  if (!ex) return null; // the range straddles a span boundary
+
+  const span: FieldSpan = {
+    fieldId,
+    direction,
+    children: children.length ? children.map((c) => ({ ...c })) : [{ text: '' }],
+  };
+  const next = normalizeNodes([...ex.before, span, ...ex.after]);
+  targetNodes.length = 0;
+  targetNodes.push(...next);
+  return { rich: out, parentFieldId, parentRel };
+}
+
+/**
+ * Remove character formatting (bold / italic / colour) while preserving
+ * structure — nested field spans stay intact. Field values hold content,
+ * not styling: the block that embeds a field controls how it looks, so a
+ * field carrying its own marks would fight its host.
+ */
+export function stripMarksNodes(nodes: InlineNode[]): InlineNode[] {
+  return normalizeNodes(
+    nodes.map((n) =>
+      isFieldSpan(n)
+        ? { ...n, children: stripMarksNodes(n.children) }
+        : { text: n.text },
+    ),
+  );
+}
+
+export function stripMarks(rich: RichText): RichText {
+  return rich.map(stripMarksNodes);
+}
+
 /* ---------- Span traversal ---------- */
 
 export interface SpanRef {

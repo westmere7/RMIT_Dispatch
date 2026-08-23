@@ -44,3 +44,8 @@ export function useWorkspace(): WorkspaceCtx {
   if (!ctx) throw new Error('useWorkspace outside Workspace');
   return ctx;
 }
+
+/** For components shared with pages that have no open document. */
+export function useWorkspaceOptional(): WorkspaceCtx | null {
+  return useContext(WorkspaceContext);
+}

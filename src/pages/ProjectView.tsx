@@ -18,7 +18,7 @@ import {
   updateDocumentMeta,
 } from '../store/documents';
 import { fetchDraft, saveDraft } from '../store/drafts';
-import { fetchFields } from '../store/fields';
+import { fetchFieldsForProject } from '../store/fields';
 import { fetchProject, updateProjectMeta } from '../store/projects';
 import { useSpaces } from '../store/spaces';
 import type { DispatchDocument, GridConfig, Page, Project, SyncField } from '../types';
@@ -53,10 +53,14 @@ export function ProjectView() {
     if (!projectId) return;
     setLoading(true);
     try {
-      const [proj, docs, flds] = await Promise.all([
-        fetchProject(projectId),
+      const proj = await fetchProject(projectId);
+      if (!proj) {
+        setProject(null);
+        return;
+      }
+      const [docs, flds] = await Promise.all([
         fetchDocuments(projectId),
-        fetchFields(projectId),
+        fetchFieldsForProject(projectId, proj.spaceId),
       ]);
       setProject(proj);
       setFields(flds);
