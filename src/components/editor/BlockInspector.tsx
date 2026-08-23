@@ -1,0 +1,843 @@
+import { useMemo, useRef, useState } from 'react';
+import { useEditor } from '../../editor/EditorProvider';
+import { effectiveColumns } from '../../grid/presets';
+import { uuid } from '../../lib/ids';
+import {
+  emptyRich,
+  plainText,
+  wrapField,
+  applyMark,
+  rangeHasMark,
+  type TextRange,
+} from '../../lib/richtext';
+import { autoFieldName, valueAsRich, wouldCreateCycle } from '../../lib/syncfields';
+import { useWorkspace } from '../../pages/Workspace';
+import { useAuth } from '../../store/auth';
+import { createField, updateFieldValue } from '../../store/fields';
+import { uploadMedia } from '../../store/media';
+import { useSpaces } from '../../store/spaces';
+import type {
+  Block,
+  CellBinding,
+  ImageBlock,
+  RichText,
+  SyncDirection,
+  TableBlock,
+  TextAlign,
+  TextBlock,
+  TextSize,
+} from '../../types';
+import {
+  IconAlignCenter,
+  IconAlignLeft,
+  IconAlignRight,
+  IconBold,
+  IconBringFront,
+  IconCopy,
+  IconItalic,
+  IconLink,
+  IconSendBack,
+  IconTrash,
+} from '../Icons';
+import { CommentThread } from './CommentThread';
+import { RichTextEditor, type RichTextEditorHandle } from './RichTextEditor';
+import { SyncPanel } from './SyncPanel';
+import { VersionPanel } from './VersionPanel';
+
+export type InspectorTab = 'properties' | 'sync' | 'versions' | 'comments';
+
+const TABS: { key: InspectorTab; label: string }[] = [
+  { key: 'properties', label: 'Properties' },
+  { key: 'sync', label: 'Sync' },
+  { key: 'versions', label: 'Versions' },
+  { key: 'comments', label: 'Comments' },
+];
+
+export function BlockInspector() {
+  const { tab, setTab } = useWorkspace();
+  return (
+    <div className="side-panel">
+      <div className="side-panel-tabs" role="tablist">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            role="tab"
+            aria-selected={tab === t.key}
+            className={tab === t.key ? 'active' : ''}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="side-panel-body">
+        {tab === 'properties' && <PropertiesPanel />}
+        {tab === 'sync' && <SyncPanel />}
+        {tab === 'versions' && <VersionPanel />}
+        {tab === 'comments' && <CommentThread />}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Properties
+   ============================================================ */
+
+function PropertiesPanel() {
+  const { state, dispatch, readOnly, currentPage } = useEditor();
+  const sel = state.selection;
+
+  if (!currentPage) return <p className="muted text-sm">No page.</p>;
+
+  const blocks = currentPage.blocks.filter((b) => sel.includes(b.id));
+
+  if (blocks.length === 0) {
+    return (
+      <div>
+        <h3 style={{ marginBottom: 6 }}>Page</h3>
+        <p className="muted text-xs">
+          {state.grid.pageSize} {state.grid.orientation} ·{' '}
+          {effectiveColumns(state.grid, currentPage.kind)}×{state.grid.rows} grid ·{' '}
+          {currentPage.kind}
+        </p>
+        <p className="muted text-xs" style={{ marginTop: 8 }}>
+          Select a block to edit it. Shift-click for multi-select.
+        </p>
+      </div>
+    );
+  }
+
+  if (blocks.length > 1) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <h3>{blocks.length} selected</h3>
+        {!readOnly && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              className="btn btn-sm"
+              onClick={() => dispatch({ type: 'DUPLICATE_BLOCKS', pageId: currentPage.id, ids: sel })}
+            >
+              <IconCopy size={13} /> Duplicate
+            </button>
+            <button
+              className="btn btn-danger btn-sm"
+              onClick={() => dispatch({ type: 'DELETE_BLOCKS', pageId: currentPage.id, ids: sel })}
+            >
+              <IconTrash size={13} /> Delete
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return <SingleBlock block={blocks[0]} pageId={currentPage.id} />;
+}
+
+function SingleBlock({ block, pageId }: { block: Block; pageId: string }) {
+  const { dispatch, readOnly, state } = useEditor();
+  const page = state.pages.find((p) => p.id === pageId)!;
+  const cols = effectiveColumns(state.grid, page.kind);
+
+  const update = (patch: Partial<Block>) =>
+    dispatch({ type: 'UPDATE_BLOCK', pageId, blockId: block.id, patch });
+
+  const posField = (key: 'col' | 'row' | 'w' | 'h', label: string, max: number) => (
+    <div className="field" style={{ flex: 1 }}>
+      <label>{label}</label>
+      <input
+        className="input"
+        type="number"
+        min={key === 'w' || key === 'h' ? 1 : 0}
+        max={max}
+        disabled={readOnly}
+        value={block.pos[key]}
+        onChange={(e) =>
+          dispatch({
+            type: 'SET_POSITIONS',
+            pageId,
+            positions: [{ id: block.id, pos: { ...block.pos, [key]: Number(e.target.value) } }],
+          })
+        }
+      />
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <h3 style={{ flex: 1, textTransform: 'capitalize' }}>{block.type} block</h3>
+        {!readOnly && (
+          <>
+            <button
+              className="icon-btn"
+              title="Bring to front"
+              aria-label="Bring to front"
+              onClick={() => dispatch({ type: 'REORDER_BLOCK', pageId, blockId: block.id, to: 'front' })}
+            >
+              <IconBringFront size={14} />
+            </button>
+            <button
+              className="icon-btn"
+              title="Send to back"
+              aria-label="Send to back"
+              onClick={() => dispatch({ type: 'REORDER_BLOCK', pageId, blockId: block.id, to: 'back' })}
+            >
+              <IconSendBack size={14} />
+            </button>
+            <button
+              className="icon-btn"
+              title="Duplicate"
+              aria-label="Duplicate"
+              onClick={() => dispatch({ type: 'DUPLICATE_BLOCKS', pageId, ids: [block.id] })}
+            >
+              <IconCopy size={14} />
+            </button>
+            <button
+              className="icon-btn"
+              title="Delete"
+              aria-label="Delete"
+              onClick={() => dispatch({ type: 'DELETE_BLOCKS', pageId, ids: [block.id] })}
+            >
+              <IconTrash size={14} />
+            </button>
+          </>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        {posField('col', 'X', cols - 1)}
+        {posField('row', 'Y', state.grid.rows - 1)}
+        {posField('w', 'W', cols)}
+        {posField('h', 'H', state.grid.rows)}
+      </div>
+
+      {block.type === 'text' && <TextProps block={block} update={update} />}
+      {block.type === 'table' && <TableProps block={block} update={update} pageId={pageId} />}
+      {block.type === 'image' && <ImageProps block={block} update={update} />}
+    </div>
+  );
+}
+
+/* ---------- Text ---------- */
+
+const SIZES: TextSize[] = ['sm', 'md', 'lg', 'xl'];
+
+function TextProps({ block, update }: { block: TextBlock; update: (p: Partial<Block>) => void }) {
+  const { readOnly } = useEditor();
+  const editorRef = useRef<RichTextEditorHandle>(null);
+  const boundDown = block.binding && block.binding.direction !== 'up';
+  const locked = readOnly || !!boundDown;
+
+  return (
+    <>
+      <div className="field">
+        <label>Heading</label>
+        <input
+          className="input"
+          disabled={locked}
+          value={block.heading ?? ''}
+          onChange={(e) => update({ heading: e.target.value || undefined })}
+          placeholder="Optional heading"
+        />
+      </div>
+
+      <div className="field">
+        <label>Body</label>
+        {boundDown && (
+          <p className="muted text-xs" style={{ marginBottom: 4 }}>
+            This block follows {block.binding?.fieldId ? 'a sync field' : 'the master'} (↓). Unlink
+            it in the Sync tab to edit.
+          </p>
+        )}
+        <RichTextBody block={block} update={update} editorRef={editorRef} locked={locked} />
+      </div>
+
+      <div className="field">
+        <label>Size</label>
+        <div className="segmented">
+          {SIZES.map((s) => (
+            <button
+              key={s}
+              disabled={readOnly}
+              className={(block.size ?? 'md') === s ? 'active' : ''}
+              onClick={() => update({ size: s })}
+            >
+              {s.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Align</label>
+        <div className="segmented">
+          {(
+            [
+              ['left', IconAlignLeft],
+              ['center', IconAlignCenter],
+              ['right', IconAlignRight],
+            ] as [TextAlign, typeof IconAlignLeft][]
+          ).map(([a, Icon]) => (
+            <button
+              key={a}
+              disabled={readOnly}
+              className={(block.align ?? 'left') === a ? 'active' : ''}
+              onClick={() => update({ align: a })}
+              aria-label={`Align ${a}`}
+            >
+              <Icon size={13} />
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Rich text body editor with mark + field toolbar. */
+function RichTextBody({
+  block,
+  update,
+  editorRef,
+  locked,
+}: {
+  block: TextBlock;
+  update: (p: Partial<Block>) => void;
+  editorRef: React.RefObject<RichTextEditorHandle>;
+  locked: boolean;
+}) {
+  const { setActiveSpan, setTab } = useWorkspace();
+  const setBody = (body: RichText) => update({ body });
+
+  const withRange = (fn: (range: TextRange) => void) => {
+    const range = editorRef.current?.getRange();
+    if (!range || range.end === range.start) {
+      alert('Select some text first (within one paragraph).');
+      return;
+    }
+    fn(range);
+  };
+
+  const toggleMark = (mark: 'bold' | 'italic') =>
+    withRange((range) => {
+      const has = rangeHasMark(block.body, range, mark);
+      setBody(applyMark(block.body, range, { [mark]: !has }));
+    });
+
+  const setColor = (color: string) =>
+    withRange((range) => setBody(applyMark(block.body, range, { color: color || undefined })));
+
+  return (
+    <RichTextEditor
+      ref={editorRef}
+      value={block.body}
+      onChange={setBody}
+      readOnly={locked}
+      onSpanClick={(info) => {
+        setActiveSpan({ blockId: block.id, ...info });
+        setTab('sync');
+      }}
+      toolbar={
+        <>
+          <button className="icon-btn" title="Bold" aria-label="Bold" onMouseDown={(e) => e.preventDefault()} onClick={() => toggleMark('bold')}>
+            <IconBold size={13} />
+          </button>
+          <button className="icon-btn" title="Italic" aria-label="Italic" onMouseDown={(e) => e.preventDefault()} onClick={() => toggleMark('italic')}>
+            <IconItalic size={13} />
+          </button>
+          <label
+            className="icon-btn"
+            title="Text color"
+            style={{ position: 'relative', cursor: 'pointer' }}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <span
+              style={{
+                width: 13,
+                height: 13,
+                borderRadius: 3,
+                background:
+                  'conic-gradient(var(--rmit-red), var(--warning), var(--success), var(--accent), var(--rmit-red))',
+              }}
+            />
+            <input
+              type="color"
+              style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+              onChange={(e) => setColor(e.target.value)}
+              aria-label="Text color"
+            />
+          </label>
+          <button
+            className="icon-btn"
+            title="Clear color"
+            aria-label="Clear color"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setColor('')}
+          >
+            <span style={{ fontSize: 11 }}>⌀</span>
+          </button>
+          <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '2px 2px' }} />
+          <FieldMenu
+            getRange={() => editorRef.current?.getRange() ?? null}
+            rich={block.body}
+            onRich={(body) => update({ body })}
+          />
+        </>
+      }
+    />
+  );
+}
+
+/* ---------- "Make sync field" / bind menu ---------- */
+
+export function FieldMenu({
+  getRange,
+  rich,
+  onRich,
+}: {
+  getRange: () => TextRange | null;
+  rich: RichText;
+  onRich: (rich: RichText) => void;
+}) {
+  const { doc, project, fields, fieldMap, setFields } = useWorkspace();
+  const { dispatch } = useEditor();
+  const { user } = useAuth();
+  const [open, setOpen] = useState(false);
+  const isMaster = doc.kind === 'master';
+  const defaultDir: SyncDirection = isMaster ? 'two-way' : 'down';
+
+  const applyWrap = async (fieldId: string, direction: SyncDirection, createNew: boolean) => {
+    if (!user) return;
+    const range = getRange();
+    if (!range || range.end === range.start) {
+      alert('Select the text to sync first (within one paragraph).');
+      return;
+    }
+    const res = wrapField(rich, range, fieldId, direction);
+    if (!res) {
+      alert('Selection cannot cross a synced span boundary. Select inside or around it.');
+      return;
+    }
+    if (res.parentFieldId) {
+      if (!createNew && wouldCreateCycle(fieldId, res.parentFieldId, fieldMap)) {
+        alert('That binding would create a cycle between fields.');
+        return;
+      }
+    }
+
+    if (createNew) {
+      const name = autoFieldName(res.text, new Set(fields.map((f) => f.name)));
+      const field = await createField({
+        id: fieldId,
+        projectId: project.id,
+        name,
+        value: { kind: 'richtext', rich: [res.children.map((c) => ({ ...c }))] },
+        userId: user.uid,
+      });
+      setFields((prev) => [...prev.filter((f) => f.id !== field.id), field]);
+    }
+
+    // Mirror the wrap into the enclosing field's canonical value (nested
+    // fields must live inside the parent value too).
+    if (res.parentFieldId && res.parentRel) {
+      const parent = fieldMap.get(res.parentFieldId);
+      if (parent) {
+        const parentRich = valueAsRich(parent.value);
+        const wrapped = wrapField(
+          parentRich,
+          { para: 0, start: res.parentRel.start, end: res.parentRel.end },
+          fieldId,
+          'down',
+        );
+        if (wrapped) {
+          await updateFieldValue(parent.id, { kind: 'richtext', rich: wrapped.rich }, user.uid);
+          setFields((prev) =>
+            prev.map((f) =>
+              f.id === parent.id ? { ...f, value: { kind: 'richtext', rich: wrapped.rich } } : f,
+            ),
+          );
+        }
+      }
+    }
+
+    onRich(res.rich);
+    setOpen(false);
+    // Re-resolve embeds against the (possibly updated) field map.
+    dispatch({ type: 'FIELDS_CHANGED', fields: fieldMap });
+  };
+
+  return (
+    <span style={{ position: 'relative' }}>
+      <button
+        className="btn btn-sm"
+        style={{ height: 26 }}
+        title="Sync field from selection"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <IconLink size={12} /> Field
+      </button>
+      {open && (
+        <div
+          className="space-switcher-menu"
+          style={{ left: 0, right: 'auto', maxHeight: 260, overflow: 'auto', minWidth: 200 }}
+        >
+          <button className="menu-item" onClick={() => void applyWrap(uuid(), defaultDir, true)}>
+            ＋ New field from selection
+          </button>
+          {fields.length > 0 && <hr className="divider" style={{ margin: '4px 0' }} />}
+          {fields.map((f) => (
+            <button
+              key={f.id}
+              className="menu-item"
+              title={plainText(valueAsRich(f.value))}
+              onClick={() => void applyWrap(f.id, defaultDir, false)}
+            >
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/* ---------- Table ---------- */
+
+function TableProps({
+  block,
+  update,
+  pageId,
+}: {
+  block: TableBlock;
+  update: (p: Partial<Block>) => void;
+  pageId: string;
+}) {
+  void pageId;
+  const { readOnly } = useEditor();
+  const { doc, project, fields, setFields, fieldMap } = useWorkspace();
+  const { user } = useAuth();
+  const [cell, setCell] = useState<{ r: number; c: number }>({ r: 0, c: 0 });
+  const cellEditorRef = useRef<RichTextEditorHandle>(null);
+
+  const nRows = block.rows.length;
+  const nCols = block.rows[0]?.length ?? 0;
+  const r = Math.min(cell.r, nRows - 1);
+  const c = Math.min(cell.c, nCols - 1);
+  const current = block.rows[r]?.[c] ?? emptyRich();
+  const binding = block.cellBindings?.find((b) => b.row === r && b.col === c);
+  const boundDown = binding && binding.direction !== 'up';
+
+  const setRows = (rows: RichText[][], cellBindings?: CellBinding[]) =>
+    update({ rows, ...(cellBindings !== undefined ? { cellBindings } : {}) } as Partial<Block>);
+
+  const setCurrentCell = (rich: RichText) => {
+    const rows = block.rows.map((row, ri) => row.map((cc, ci) => (ri === r && ci === c ? rich : cc)));
+    setRows(rows);
+  };
+
+  const insertRow = () => {
+    const rows = [...block.rows];
+    rows.splice(r + 1, 0, Array.from({ length: nCols }, () => emptyRich()));
+    const cb = (block.cellBindings ?? []).map((b) => (b.row > r ? { ...b, row: b.row + 1 } : b));
+    setRows(rows, cb);
+  };
+  const deleteRow = () => {
+    if (nRows <= 1) return;
+    const rows = block.rows.filter((_, ri) => ri !== r);
+    const cb = (block.cellBindings ?? [])
+      .filter((b) => b.row !== r)
+      .map((b) => (b.row > r ? { ...b, row: b.row - 1 } : b));
+    setRows(rows, cb);
+    setCell({ r: Math.max(0, r - 1), c });
+  };
+  const insertCol = () => {
+    const rows = block.rows.map((row) => {
+      const next = [...row];
+      next.splice(c + 1, 0, emptyRich());
+      return next;
+    });
+    const cb = (block.cellBindings ?? []).map((b) => (b.col > c ? { ...b, col: b.col + 1 } : b));
+    setRows(rows, cb);
+  };
+  const deleteCol = () => {
+    if (nCols <= 1) return;
+    const rows = block.rows.map((row) => row.filter((_, ci) => ci !== c));
+    const cb = (block.cellBindings ?? [])
+      .filter((b) => b.col !== c)
+      .map((b) => (b.col > c ? { ...b, col: b.col - 1 } : b));
+    setRows(rows, cb);
+    setCell({ r, c: Math.max(0, c - 1) });
+  };
+
+  const bindCell = async (fieldId: string, createNew: boolean) => {
+    if (!user) return;
+    const direction: SyncDirection = doc.kind === 'master' ? 'two-way' : 'down';
+    if (createNew) {
+      const name = autoFieldName(plainText(current), new Set(fields.map((f) => f.name)));
+      const field = await createField({
+        id: fieldId,
+        projectId: project.id,
+        name,
+        value: { kind: 'richtext', rich: current },
+        userId: user.uid,
+      });
+      setFields((prev) => [...prev, field]);
+    }
+    const cb = [
+      ...(block.cellBindings ?? []).filter((b) => !(b.row === r && b.col === c)),
+      { row: r, col: c, fieldId, direction },
+    ];
+    update({ cellBindings: cb } as Partial<Block>);
+  };
+
+  const unbindCell = () => {
+    update({
+      cellBindings: (block.cellBindings ?? []).filter((b) => !(b.row === r && b.col === c)),
+    } as Partial<Block>);
+  };
+
+  const [bindMenu, setBindMenu] = useState(false);
+
+  return (
+    <>
+      <div className="field">
+        <label>
+          <input
+            type="checkbox"
+            checked={block.headerRow}
+            disabled={readOnly}
+            onChange={(e) => update({ headerRow: e.target.checked } as Partial<Block>)}
+            style={{ marginRight: 6 }}
+          />
+          First row is a header
+        </label>
+      </div>
+
+      <div className="field">
+        <label>
+          Cells ({nRows}×{nCols}) — selected: R{r + 1} C{c + 1}
+        </label>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${nCols}, 1fr)`,
+            gap: 2,
+            maxHeight: 140,
+            overflow: 'auto',
+          }}
+        >
+          {block.rows.map((row, ri) =>
+            row.map((cc, ci) => {
+              const isSel = ri === r && ci === c;
+              const hasBind = block.cellBindings?.some((b) => b.row === ri && b.col === ci);
+              return (
+                <button
+                  key={`${ri}-${ci}`}
+                  onClick={() => setCell({ r: ri, c: ci })}
+                  title={plainText(cc)}
+                  style={{
+                    height: 24,
+                    fontSize: 10,
+                    overflow: 'hidden',
+                    whiteSpace: 'nowrap',
+                    textOverflow: 'ellipsis',
+                    border: `1px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`,
+                    borderRadius: 3,
+                    background: hasBind ? 'var(--accent-wash)' : isSel ? 'var(--surface-2)' : 'transparent',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    padding: '0 3px',
+                  }}
+                >
+                  {plainText(cc) || '·'}
+                </button>
+              );
+            }),
+          )}
+        </div>
+      </div>
+
+      {!readOnly && (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          <button className="btn btn-sm" onClick={insertRow}>
+            + Row
+          </button>
+          <button className="btn btn-sm" onClick={deleteRow} disabled={nRows <= 1}>
+            − Row
+          </button>
+          <button className="btn btn-sm" onClick={insertCol}>
+            + Col
+          </button>
+          <button className="btn btn-sm" onClick={deleteCol} disabled={nCols <= 1}>
+            − Col
+          </button>
+        </div>
+      )}
+
+      <div className="field">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          Cell content
+          {binding && (
+            <span className={`pill ${binding.direction === 'down' ? 'pill-accent' : 'pill-warning'}`}>
+              {binding.direction === 'down' ? '↓' : binding.direction === 'up' ? '↑' : '⇅'}{' '}
+              {fieldMap.get(binding.fieldId)?.name ?? 'field'}
+            </span>
+          )}
+        </label>
+        <RichTextEditor
+          ref={cellEditorRef}
+          value={current}
+          onChange={setCurrentCell}
+          readOnly={readOnly || !!boundDown}
+          compact
+        />
+        {!readOnly && (
+          <div style={{ display: 'flex', gap: 4, marginTop: 4, position: 'relative', flexWrap: 'wrap' }}>
+            {binding ? (
+              <>
+                <select
+                  className="input"
+                  style={{ width: 110, height: 28 }}
+                  value={binding.direction}
+                  onChange={(e) =>
+                    update({
+                      cellBindings: (block.cellBindings ?? []).map((b) =>
+                        b.row === r && b.col === c
+                          ? { ...b, direction: e.target.value as SyncDirection }
+                          : b,
+                      ),
+                    } as Partial<Block>)
+                  }
+                  aria-label="Cell sync direction"
+                >
+                  <option value="down">↓ down</option>
+                  <option value="up">↑ up</option>
+                  <option value="two-way">⇅ two-way</option>
+                </select>
+                <button className="btn btn-sm" onClick={unbindCell}>
+                  Unlink cell
+                </button>
+              </>
+            ) : (
+              <>
+                <button className="btn btn-sm" onClick={() => setBindMenu((o) => !o)}>
+                  <IconLink size={12} /> Bind cell to field
+                </button>
+                {bindMenu && (
+                  <div className="space-switcher-menu" style={{ left: 0, right: 'auto', top: '100%' }}>
+                    <button
+                      className="menu-item"
+                      onClick={() => {
+                        void bindCell(uuid(), true);
+                        setBindMenu(false);
+                      }}
+                    >
+                      ＋ New field from cell
+                    </button>
+                    {fields.map((f) => (
+                      <button
+                        key={f.id}
+                        className="menu-item"
+                        onClick={() => {
+                          void bindCell(f.id, false);
+                          setBindMenu(false);
+                        }}
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ---------- Image ---------- */
+
+function ImageProps({ block, update }: { block: ImageBlock; update: (p: Partial<Block>) => void }) {
+  const { readOnly } = useEditor();
+  const { currentSpace } = useSpaces();
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const memoFit = useMemo(() => block.fit ?? 'cover', [block.fit]);
+
+  const onFile = async (file: File) => {
+    if (!currentSpace) return;
+    setUploading(true);
+    try {
+      const path = await uploadMedia(currentSpace.id, file);
+      update({ storagePath: path } as Partial<Block>);
+    } catch (e) {
+      console.error(e);
+      alert('Upload failed — is the `media` bucket created?');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <>
+      {!readOnly && (
+        <div className="field">
+          <label>Image</label>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onFile(f);
+              e.target.value = '';
+            }}
+          />
+          <button className="btn" onClick={() => fileRef.current?.click()} disabled={uploading}>
+            {uploading ? 'Uploading…' : block.storagePath ? 'Replace image' : 'Upload image'}
+          </button>
+        </div>
+      )}
+      <div className="field">
+        <label>Fit</label>
+        <div className="segmented">
+          {(['cover', 'contain'] as const).map((f) => (
+            <button
+              key={f}
+              disabled={readOnly}
+              className={memoFit === f ? 'active' : ''}
+              onClick={() => update({ fit: f } as Partial<Block>)}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        <label>Alt text</label>
+        <input
+          className="input"
+          disabled={readOnly}
+          value={block.alt ?? ''}
+          onChange={(e) => update({ alt: e.target.value || undefined } as Partial<Block>)}
+        />
+      </div>
+      <div className="field">
+        <label>Caption</label>
+        <input
+          className="input"
+          disabled={readOnly}
+          value={block.caption ?? ''}
+          onChange={(e) => update({ caption: e.target.value || undefined } as Partial<Block>)}
+        />
+      </div>
+    </>
+  );
+}

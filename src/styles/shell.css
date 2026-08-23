@@ -1,0 +1,227 @@
+/* ============================================================
+   App shell — floating panel on a tinted canvas
+   ============================================================ */
+
+.app-frame {
+  height: 100%;
+  padding: var(--space-4);
+  display: flex;
+}
+
+.app-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+/* ---------- Left icon rail ---------- */
+.rail {
+  width: 56px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-right: 1px solid var(--border);
+}
+
+.rail-brand {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--rmit-red);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: var(--space-3);
+  user-select: none;
+}
+
+.rail-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.rail-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.rail-btn.active {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
+/* ---------- Top bar ---------- */
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  height: 56px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 20;
+}
+
+.topbar-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.topbar-title .crumb {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.topbar-title .crumb-sep {
+  color: var(--border-strong);
+}
+
+.topbar-search {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+.topbar-search input {
+  width: 100%;
+  max-width: 380px;
+  height: 34px;
+  border-radius: 999px;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 0 var(--space-4) 0 36px;
+  font-size: var(--fs-sm);
+  font-family: inherit;
+}
+.topbar-search input:focus {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.topbar-search .search-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 380px;
+}
+.topbar-search .search-wrap svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.content-pad {
+  padding: var(--space-5);
+}
+
+/* ---------- Space switcher ---------- */
+.space-switcher {
+  position: relative;
+}
+.space-switcher-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1);
+  z-index: 60;
+}
+.space-switcher-menu .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.space-switcher-menu .menu-item:hover {
+  background: var(--surface-2);
+}
+.space-switcher-menu .menu-item.active {
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------- Auth screens ---------- */
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.auth-error {
+  background: var(--primary-wash);
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: var(--fs-sm);
+}

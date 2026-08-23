@@ -1,0 +1,106 @@
+/* ============================================================
+   RMIT Dispatch — design tokens
+   Brand constants: --rmit-red / --rmit-navy. All accents derive
+   from these. Semantic colors swap via [data-theme].
+   ============================================================ */
+
+:root {
+  /* Brand */
+  --rmit-red: #e61e2a;
+  --rmit-navy: #000054;
+
+  /* Spacing scale 1..8 → 4/8/12/16/24/32/48/64 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 18px;
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Type scale — compact & crisp */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --font:
+    "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ---------- Light (default) — tinted canvas + white floating surfaces */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #dcdbe6;
+  --surface: #ffffff;
+  --surface-2: #f2f2f7;
+  --border: #e4e4ec;
+  --border-strong: #c9cdd6;
+  --text: #16181d;
+  --text-muted: #5b6472;
+  --primary: var(--rmit-red);
+  --primary-hover: #c8121d;
+  --on-primary: #ffffff;
+  --accent: var(--rmit-navy);
+  --accent-hover: #0a0a78;
+  --on-accent: #ffffff;
+  --danger: #d92d20;
+  --success: #15803d;
+  --warning: #b45309;
+  --ring: 0 0 0 3px rgba(230, 30, 42, 0.35);
+  --shadow-sm: 0 1px 2px rgba(22, 24, 29, 0.06);
+  --shadow: 0 4px 14px rgba(22, 24, 29, 0.08);
+  --shadow-lg: 0 18px 48px rgba(22, 24, 29, 0.16);
+
+  /* Washes / tints derived from brand */
+  --accent-wash: rgba(0, 0, 84, 0.07);
+  --primary-wash: rgba(230, 30, 42, 0.07);
+  --success-wash: rgba(21, 128, 61, 0.09);
+  --warning-wash: rgba(180, 83, 9, 0.1);
+  --hatch: rgba(22, 24, 29, 0.045);
+  --scrim: rgba(22, 24, 29, 0.4);
+}
+
+/* ---------- Dark — navy-tinted surfaces (exact values from spec) */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #06061a;
+  --surface: #0f1030;
+  --surface-2: #181a3d;
+  --border: #2a2d5a;
+  --border-strong: #3c4076;
+  --text: #eef0fb;
+  --text-muted: #9aa3c8;
+  --primary: #ff4d57;
+  --primary-hover: #ff6b73;
+  --on-primary: #ffffff;
+  --accent: #9296f2;
+  --accent-hover: #a8abf7;
+  --on-accent: #ffffff;
+  --danger: #f97066;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --ring: 0 0 0 3px rgba(255, 77, 87, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 16, 0.5);
+  --shadow: 0 4px 14px rgba(0, 0, 20, 0.55);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 24, 0.7);
+
+  --accent-wash: rgba(146, 150, 242, 0.14);
+  --primary-wash: rgba(255, 77, 87, 0.12);
+  --success-wash: rgba(74, 222, 128, 0.12);
+  --warning-wash: rgba(251, 191, 36, 0.12);
+  --hatch: rgba(238, 240, 251, 0.05);
+  --scrim: rgba(0, 0, 10, 0.6);
+}
