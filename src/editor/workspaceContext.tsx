@@ -6,7 +6,8 @@ import type { PresenceUser } from '../store/realtime';
 /* Lives in its own module so canvas-level components can consume the
    workspace without importing the Workspace page (which renders them). */
 
-export type InspectorTab = 'properties' | 'sync' | 'versions' | 'comments';
+/** Properties moved to the contextual bar above the canvas. */
+export type InspectorTab = 'sync' | 'versions' | 'comments';
 
 /** A field span the user clicked, wherever it was clicked from. */
 export interface ActiveSpan {

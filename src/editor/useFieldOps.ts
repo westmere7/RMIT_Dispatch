@@ -1,11 +1,12 @@
 import { useCallback } from 'react';
 import { useDialog } from '../components/Dialog';
-import { fieldFits, fieldShapeLabel, type FieldTarget } from '../lib/fieldtypes';
+import { blockTarget, fieldFits, fieldShapeLabel, type FieldTarget } from '../lib/fieldtypes';
 import { uuid } from '../lib/ids';
 import { insertFieldAt, plainText, wrapField, type TextRange } from '../lib/richtext';
 import {
   autoFieldName,
   resolveFieldInline,
+  valueAsImage,
   valueAsRich,
   valueAsTable,
   wouldCreateCycle,
@@ -219,11 +220,10 @@ export function useFieldOps(opts: { newFieldFolder?: string } = {}) {
     ): Promise<Partial<Block> | null> => {
       const field = fieldMap.get(fieldId);
       if (!field) return null;
-      const target: FieldTarget | null =
-        block.type === 'text' ? 'textBlock' : block.type === 'table' ? 'tableBlock' : null;
+      const target: FieldTarget | null = blockTarget(block);
       if (!target) {
-        await dialog.alert('Images cannot be synced by field', {
-          message: 'Bind an image block to its master block instead.',
+        await dialog.alert('Shapes cannot be synced', {
+          message: 'Shapes are decoration — they hold no content to share.',
         });
         return null;
       }
@@ -243,18 +243,66 @@ export function useFieldOps(opts: { newFieldFolder?: string } = {}) {
           rows: table.rows.map((row) => row.map((cell) => cell)),
         } as Partial<Block>;
       }
+      if (block.type === 'image') {
+        const img = valueAsImage(field.value)!;
+        return {
+          binding,
+          storagePath: img.storagePath,
+          alt: img.alt,
+          caption: img.caption,
+          // The block keeps its own framing if the field has no opinion.
+          fit: img.fit ?? block.fit,
+        } as Partial<Block>;
+      }
       return { binding, body: valueAsRich(field.value) } as Partial<Block>;
     },
     [fieldMap, checkFit, dialog, defaultDirection],
   );
 
-  /** Promote a whole block into a new field of the matching shape. */
+  /**
+   * Promote a whole block into a new field of the *matching* shape — a text
+   * block becomes a text field, a table a table field, an image an image
+   * field. No text selection needed: the block's own content is the value.
+   */
   const createFieldFromBlock = useCallback(
     async (block: Block): Promise<Partial<Block> | null> => {
       if (!user) return null;
+      if (block.type === 'shape') {
+        await dialog.alert('Shapes cannot be synced', {
+          message: 'Shapes are decoration — they hold no content to share.',
+        });
+        return null;
+      }
+      if (block.binding) {
+        await dialog.alert('This block already syncs', {
+          message: 'Unlink it first if you want it to become a new field.',
+        });
+        return null;
+      }
       const id = uuid();
       const existingNames = new Set(fields.map((f) => f.name));
 
+      if (block.type === 'image') {
+        const name = autoFieldName(block.alt || block.caption || 'image', existingNames);
+        const field = await createField({
+          id,
+          projectId: project.id,
+          spaceId: project.spaceId,
+          scope: 'local',
+          folder: newFieldFolder,
+          name,
+          value: {
+            kind: 'image',
+            storagePath: block.storagePath,
+            alt: block.alt,
+            caption: block.caption,
+            fit: block.fit,
+          },
+          userId: user.uid,
+        });
+        setFields((prev) => [...prev, field]);
+        return { binding: { fieldId: id, sourceBlockId: block.id, direction: 'two-way' } };
+      }
       if (block.type === 'table') {
         const name = autoFieldName(plainText(block.rows[0]?.[0] ?? []) || 'table', existingNames);
         const field = await createField({
@@ -287,7 +335,7 @@ export function useFieldOps(opts: { newFieldFolder?: string } = {}) {
       }
       return null;
     },
-    [user, fields, project.id, project.spaceId, newFieldFolder, setFields],
+    [user, dialog, fields, project.id, project.spaceId, newFieldFolder, setFields],
   );
 
   return {

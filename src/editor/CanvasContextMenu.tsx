@@ -14,12 +14,16 @@ import {
   IconType,
   IconUnlink,
 } from '../components/Icons';
+import { restoreSelectionSoon } from '../lib/richdom';
+import { SIZE_LABEL, TEXT_SIZES } from '../lib/textsize';
 import { blockTarget, fieldShapeLabel, partitionByFit } from '../lib/fieldtypes';
 import { emptyRich, insertFieldAt } from '../lib/richtext';
 import {
   applyMark,
+  applyMarkAll,
   plainText,
   rangeHasMark,
+  richHasMark,
   setSpanDirection,
   unlinkSpan,
   type TextRange,
@@ -33,7 +37,6 @@ import type {
   SyncDirection,
   SyncField,
   TextAlign,
-  TextSize,
 } from '../types';
 import { useEditor } from './EditorProvider';
 import { useFieldOps } from './useFieldOps';
@@ -50,7 +53,7 @@ export interface CanvasTarget {
   range: TextRange | null;
 }
 
-const SIZES: TextSize[] = ['xs', 'sm', 'md', 'lg', 'xl'];
+
 const DIRECTIONS: { dir: SyncDirection; label: string; hint: string }[] = [
   { dir: 'down', label: '↓ Down', hint: 'follow' },
   { dir: 'up', label: '↑ Up', hint: 'push' },
@@ -356,24 +359,40 @@ export function CanvasContextMenu({
       });
     }
 
+    /* Formatting applies to the selection, or to all of the block's text
+       when nothing is selected — the word-processor rule. The selection
+       is put back afterwards, since marking re-renders the editor. */
+    const mark = (patch: Parameters<typeof applyMarkAll>[1]) => {
+      setBody(hasSel ? applyMark(rich, range!, patch) : applyMarkAll(rich, patch));
+      if (hasSel && block) {
+        const id = block.id;
+        restoreSelectionSoon(
+          () =>
+            document.querySelector(
+              `[data-block-id="${id}"] .inline-editor-body`,
+            ) as HTMLElement | null,
+          range!,
+        );
+      }
+    };
+    const has = (m: 'bold' | 'italic') =>
+      hasSel ? rangeHasMark(rich, range!, m) : richHasMark(rich, m);
+
     items.push({
       kind: 'submenu',
-      label: 'Format selection',
-      disabled: !hasSel,
+      label: hasSel ? 'Format selection' : 'Format all text',
       items: [
         {
           kind: 'check',
           label: 'Bold',
-          checked: hasSel ? rangeHasMark(rich, range!, 'bold') : false,
-          onSelect: () =>
-            setBody(applyMark(rich, range!, { bold: !rangeHasMark(rich, range!, 'bold') })),
+          checked: has('bold'),
+          onSelect: () => mark({ bold: !has('bold') }),
         },
         {
           kind: 'check',
           label: 'Italic',
-          checked: hasSel ? rangeHasMark(rich, range!, 'italic') : false,
-          onSelect: () =>
-            setBody(applyMark(rich, range!, { italic: !rangeHasMark(rich, range!, 'italic') })),
+          checked: has('italic'),
+          onSelect: () => mark({ italic: !has('italic') }),
         },
         { kind: 'separator' },
         ...(['#e61e2a', '#000054', '#15803d', '#b45309', '#16181d'] as const).map((c) => ({
@@ -384,7 +403,7 @@ export function CanvasContextMenu({
               style={{ width: 11, height: 11, borderRadius: 3, background: c, display: 'block' }}
             />
           ),
-          onSelect: () => setBody(applyMark(rich, range!, { color: c === '#16181d' ? undefined : c })),
+          onSelect: () => mark({ color: c === '#16181d' ? undefined : c }),
         })),
       ],
     });
@@ -415,9 +434,9 @@ export function CanvasContextMenu({
       items.push({
         kind: 'submenu',
         label: 'Text size',
-        items: SIZES.map((s) => ({
+        items: TEXT_SIZES.map((s) => ({
           kind: 'check' as const,
-          label: s.toUpperCase(),
+          label: SIZE_LABEL[s],
           checked: (block.type === 'text' ? (block.size ?? 'md') : 'md') === s,
           onSelect: () => patch({ size: s } as Partial<Block>),
         })),

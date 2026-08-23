@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase';
 import type { Page, Version } from '../types';
 import { bumpVersionPointer } from './documents';
+import { foldHeadings } from '../lib/blocks';
 
 function map(r: Record<string, unknown>): Version {
   return {
@@ -11,7 +12,7 @@ function map(r: Record<string, unknown>): Version {
     createdBy: r.created_by as string,
     createdByName: (r.created_by_name as string) ?? '',
     createdAt: r.created_at as string,
-    snapshot: r.snapshot as { pages: Page[] },
+    snapshot: { pages: foldHeadings((r.snapshot as { pages: Page[] }).pages ?? []) },
   };
 }
 

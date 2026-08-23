@@ -1,6 +1,17 @@
-import type { Block, BlockType, GridConfig, GridPos, Page, RichText, ShapeKind } from '../types';
+import type {
+  Block,
+  BlockType,
+  GridConfig,
+  GridPos,
+  InlineNode,
+  Page,
+  RichText,
+  ShapeKind,
+  TextSize,
+} from '../types';
 import { effectiveColumns } from '../grid/presets';
 import { newId } from './ids';
+import { TEXT_SIZES } from './textsize';
 import { emptyRich, richFromText } from './richtext';
 
 /* ---------- Geometry ---------- */
@@ -129,4 +140,42 @@ export function duplicateBlock(block: Block, cols: number, rows: number): Block 
   copy.id = newId('blk');
   copy.pos = clampPos({ ...copy.pos, col: copy.pos.col + 1, row: copy.pos.row + 1 }, cols, rows);
   return copy;
+}
+
+/* ============================================================
+   Heading migration.
+
+   Text blocks used to carry a separate `heading` string rendered above
+   the body. Authors decide what a heading is by formatting it, so the
+   field is gone — but existing documents still hold the text, and it
+   must not vanish. Reading folds it into the body as its own first
+   paragraph, bold and one size step up, which is what it looked like.
+   ============================================================ */
+
+function stepUp(size: TextSize | undefined): TextSize {
+  const i = TEXT_SIZES.indexOf(size ?? 'md');
+  return TEXT_SIZES[Math.min(TEXT_SIZES.length - 1, i + 1)];
+}
+
+export function foldHeading(block: Block): Block {
+  if (block.type !== 'text' || !block.heading) return block;
+  const head: InlineNode[] = [
+    { text: block.heading, bold: true, size: stepUp(block.size) },
+  ];
+  const { heading: _dropped, ...rest } = block;
+  return { ...rest, body: [head, ...block.body] };
+}
+
+/** Fold every legacy heading in a page list. Cheap no-op when there are none. */
+export function foldHeadings(pages: Page[]): Page[] {
+  let touched = false;
+  const next = pages.map((p) => {
+    const blocks = p.blocks.map((b) => {
+      const folded = foldHeading(b);
+      if (folded !== b) touched = true;
+      return folded;
+    });
+    return { ...p, blocks };
+  });
+  return touched ? next : pages;
 }

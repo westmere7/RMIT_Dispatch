@@ -13,7 +13,7 @@ interface ThemeCtx {
 const Ctx = createContext<ThemeCtx>({ theme: 'light', toggle: () => {} });
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const { settings, update } = useSettings();
+  const { settings, save } = useSettings();
   const [systemTheme, setSystemTheme] = useState<Theme>(() =>
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
   );
@@ -37,10 +37,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [theme]);
 
-  /** The top-bar toggle picks a side explicitly, leaving 'system'. */
+  /**
+   * The top-bar toggle picks a side explicitly, leaving 'system'. It has
+   * no Save button of its own, so it commits immediately rather than
+   * leaving the settings page dirty.
+   */
   const toggle = useCallback(
-    () => update({ theme: theme === 'light' ? 'dark' : 'light' }),
-    [theme, update],
+    () => void save({ theme: theme === 'light' ? 'dark' : 'light' }),
+    [theme, save],
   );
 
   return <Ctx.Provider value={{ theme, toggle }}>{children}</Ctx.Provider>;

@@ -169,9 +169,13 @@ export function useZoomPan(
         el.isContentEditable);
 
     const onDown = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || isTyping(e.target) || e.repeat) return;
-      // Stop the page scrolling while space is used as a modifier.
+      if (e.code !== 'Space' || isTyping(e.target)) return;
+      // Stop the page scrolling while space is used as a modifier. This
+      // must also cancel the auto-repeat events: bailing out on
+      // `e.repeat` before preventDefault let a HELD space scroll the
+      // page even though the first press was swallowed.
       e.preventDefault();
+      if (e.repeat) return;
       setPanReady(true);
     };
     const onUp = (e: KeyboardEvent) => {

@@ -1,10 +1,12 @@
 import { supabase } from '../lib/supabase';
 import type { Draft, Page } from '../types';
+import { foldHeadings } from '../lib/blocks';
 
 export function mapDraft(r: Record<string, unknown>): Draft {
   return {
     documentId: r.document_id as string,
-    pages: (r.pages as Page[]) ?? [],
+    // Legacy heading fields fold into the body on the way in.
+    pages: foldHeadings((r.pages as Page[]) ?? []),
     updatedAt: r.updated_at as string,
     updatedBy: (r.updated_by as string) ?? '',
   };
@@ -28,7 +30,9 @@ export async function fetchFirstPages(documentIds: string[]): Promise<Map<string
     .select('document_id, pages')
     .in('document_id', documentIds);
   if (error) throw error;
-  return new Map((data ?? []).map((r) => [r.document_id as string, (r.pages as Page[])[0]]));
+  return new Map(
+    (data ?? []).map((r) => [r.document_id as string, foldHeadings(r.pages as Page[])[0]]),
+  );
 }
 
 export async function saveDraft(documentId: string, pages: Page[], userId: string): Promise<void> {

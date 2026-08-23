@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { BlockView } from '../components/editor/BlockView';
 import { InlineTextEditor, type InlineEditorHandle } from '../components/editor/InlineTextEditor';
@@ -14,6 +14,44 @@ export interface SpanClickInfo {
 
 const CORNERS: ResizeCorner[] = ['nw', 'ne', 'sw', 'se'];
 
+/**
+ * Does the text block's copy exceed its box? `.block-content` clips, so
+ * the overflow shows up as scrollHeight beyond clientHeight. Both the
+ * static view and the inline editor use that element, so the marker
+ * behaves the same while typing.
+ *
+ * The ResizeObserver catches box and zoom changes; `dep` catches content
+ * edits, which can overflow without changing the element's own size.
+ */
+function useTextOverflow(
+  frameRef: React.RefObject<HTMLElement>,
+  enabled: boolean,
+  dep: unknown,
+): boolean {
+  const [over, setOver] = useState(false);
+  useLayoutEffect(() => {
+    if (!enabled) {
+      setOver(false);
+      return;
+    }
+    const frame = frameRef.current;
+    if (!frame) return;
+    const measure = () => {
+      const el = frame.querySelector('.block-content') as HTMLElement | null;
+      if (!el) return;
+      // A pixel of slack: sub-pixel line metrics otherwise flicker it on.
+      setOver(el.scrollHeight - el.clientHeight > 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(frame);
+    const content = frame.querySelector('.block-content');
+    if (content) ro.observe(content);
+    return () => ro.disconnect();
+  }, [frameRef, enabled, dep]);
+  return over;
+}
+
 export function BlockFrame({
   block,
   cols,
@@ -24,6 +62,7 @@ export function BlockFrame({
   onPointerDown,
   onHandlePointerDown,
   onSpanClick,
+  onEnteredField,
   onStartEdit,
   onBodyChange,
   onContextMenu,
@@ -38,6 +77,7 @@ export function BlockFrame({
   onPointerDown: (e: ReactPointerEvent, blockId: string) => void;
   onHandlePointerDown: (e: ReactPointerEvent, blockId: string, corner: ResizeCorner) => void;
   onSpanClick?: (info: SpanClickInfo) => void;
+  onEnteredField?: (fieldId: string | null) => void;
   onStartEdit?: (blockId: string) => void;
   onBodyChange?: (blockId: string, body: RichText) => void;
   onContextMenu?: (e: ReactMouseEvent, blockId: string, fieldId: string | null) => void;
@@ -58,6 +98,7 @@ export function BlockFrame({
   const bodyLocked = !!syncedDown;
 
   const innerRef = useRef<HTMLDivElement>(null);
+  const textOverflow = useTextOverflow(innerRef, isText, block);
 
   // Focus the inline editor when an edit session opens.
   useEffect(() => {
@@ -105,6 +146,17 @@ export function BlockFrame({
       }}
       data-block-id={block.id}
     >
+      {/* Illustrator's overflow marker: the copy does not fit its box. */}
+      {textOverflow && (
+        <span
+          className="overflow-mark"
+          title="Text overflows this box — enlarge the box or shorten the copy"
+          aria-label="Text overflows this box"
+        >
+          +
+        </span>
+      )}
+
       {selected && block.binding && (
         <span className={`binding-chip ${dir !== 'down' ? 'chip-warning' : ''}`}>
           {glyph} {block.binding.fieldId ? 'field' : 'master'}
@@ -117,6 +169,7 @@ export function BlockFrame({
           block={block}
           onChange={(body) => onBodyChange?.(block.id, body)}
           onSpanClick={(info) => onSpanClick?.({ blockId: block.id, ...info })}
+          onEnteredField={onEnteredField}
         />
       ) : (
         <BlockView block={block} />

@@ -21,6 +21,7 @@ export const PageSurface = forwardRef<HTMLDivElement, {
   onBlockPointerDown: (e: ReactPointerEvent, blockId: string) => void;
   onHandlePointerDown: (e: ReactPointerEvent, blockId: string, corner: ResizeCorner) => void;
   onSpanClick?: (info: SpanClickInfo) => void;
+  onEnteredField?: (fieldId: string | null) => void;
   onStartEdit?: (blockId: string) => void;
   onBodyChange?: (blockId: string, body: RichText) => void;
   onBlockContextMenu?: (e: ReactMouseEvent, blockId: string, fieldId: string | null) => void;
@@ -38,6 +39,7 @@ export const PageSurface = forwardRef<HTMLDivElement, {
     onBlockPointerDown,
     onHandlePointerDown,
     onSpanClick,
+    onEnteredField,
     onStartEdit,
     onBodyChange,
     onBlockContextMenu,
@@ -125,6 +127,7 @@ export const PageSurface = forwardRef<HTMLDivElement, {
           onPointerDown={onBlockPointerDown}
           onHandlePointerDown={onHandlePointerDown}
           onSpanClick={onSpanClick}
+          onEnteredField={onEnteredField}
           onStartEdit={onStartEdit}
           onBodyChange={onBodyChange}
           onContextMenu={onBlockContextMenu}

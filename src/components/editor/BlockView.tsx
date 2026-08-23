@@ -1,7 +1,8 @@
 import { Fragment } from 'react';
 import { IconImage } from '../Icons';
 import { mediaUrl } from '../../lib/supabase';
-import type { Block, InlineNode, RichText, ShapeBlock } from '../../types';
+import { runFontSize } from '../../lib/textsize';
+import type { Block, InlineNode, RichText, ShapeBlock, TextSize } from '../../types';
 import { isFieldSpan } from '../../types';
 
 /* Render-only view of a block's content (canvas + previews). Field spans
@@ -11,10 +12,12 @@ export function InlineNodes({
   nodes,
   para,
   path = [],
+  base = 'md',
 }: {
   nodes: InlineNode[];
   para: number;
   path?: number[];
+  base?: TextSize;
 }) {
   return (
     <>
@@ -28,17 +31,25 @@ export function InlineNodes({
               data-fieldspan={n.fieldId}
               data-para={para}
               data-path={JSON.stringify([...path, i])}
+              /* The embed's own marks style all of it, so a field dropped
+                 into a bold sentence reads as part of that sentence. */
+              style={{
+                fontWeight: n.bold ? 600 : undefined,
+                fontStyle: n.italic ? 'italic' : undefined,
+                color: n.color,
+                fontSize: runFontSize(n.size, base),
+              }}
             >
-              <InlineNodes nodes={n.children} para={para} path={[...path, i]} />
+              <InlineNodes nodes={n.children} para={para} path={[...path, i]} base={n.size ?? base} />
             </span>
           );
         }
         let el = <Fragment key={i}>{n.text}</Fragment>;
         if (n.bold) el = <strong key={i}>{el}</strong>;
         if (n.italic) el = <em key={i}>{el}</em>;
-        if (n.color) {
+        if (n.color || n.size) {
           el = (
-            <span key={i} style={{ color: n.color }}>
+            <span key={i} style={{ color: n.color, fontSize: runFontSize(n.size, base) }}>
               {el}
             </span>
           );
@@ -49,12 +60,12 @@ export function InlineNodes({
   );
 }
 
-export function RichTextView({ rich }: { rich: RichText }) {
+export function RichTextView({ rich, base }: { rich: RichText; base?: TextSize }) {
   return (
     <>
       {rich.map((para, pi) => (
         <p key={pi}>
-          <InlineNodes nodes={para} para={pi} />
+          <InlineNodes nodes={para} para={pi} base={base} />
           {para.length === 1 && !isFieldSpan(para[0]) && para[0].text === '' && <br />}
         </p>
       ))}
@@ -73,8 +84,7 @@ export function BlockView({ block }: { block: Block }) {
           color: block.color || undefined,
         }}
       >
-        {block.heading && <div className="block-heading">{block.heading}</div>}
-        <RichTextView rich={block.body} />
+        <RichTextView rich={block.body} base={block.size ?? 'md'} />
       </div>
     );
   }

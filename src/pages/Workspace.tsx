@@ -146,7 +146,7 @@ function blockMap(pages: Page[] | null): Map<string, Block> | null {
   return new Map(pages.flatMap((p) => p.blocks.map((b) => [b.id, b] as const)));
 }
 
-const TAB_NAMES: InspectorTab[] = ['properties', 'sync', 'versions', 'comments'];
+const TAB_NAMES: InspectorTab[] = ['sync', 'versions', 'comments'];
 
 function WorkspaceLoaded(props: {
   doc: DispatchDocument;
@@ -168,7 +168,7 @@ function WorkspaceLoaded(props: {
   const [search] = useSearchParams();
   const [tab, setTab] = useState<InspectorTab>(() => {
     const wanted = search.get('tab') as InspectorTab | null;
-    return wanted && TAB_NAMES.includes(wanted) ? wanted : 'properties';
+    return wanted && TAB_NAMES.includes(wanted) ? wanted : 'sync';
   });
   const [activeSpan, setActiveSpan] = useState<ActiveSpan | null>(null);
   const [versionsKey, setVersionsKey] = useState(0);
@@ -646,6 +646,20 @@ function WorkspaceInner({
             </div>
           )}
           <div className="editor-toolbar">
+            {/* Read mode: the one thing people come here to do. Sitting at
+                the start of an otherwise empty toolbar, full size, with the
+                state spelled out beside it. */}
+            {canEdit && !isLockHolder && !doc.lock && (
+              <>
+                <button className="btn btn-primary btn-edit-cta" onClick={() => void startEditing()}>
+                  <IconPencil size={15} /> Edit document
+                </button>
+                <span className="muted text-xs edit-cta-hint">
+                  Read-only — take the lock to change anything.
+                </span>
+              </>
+            )}
+
             {isLockHolder && currentPage && (
               <>
                 <button
@@ -691,26 +705,19 @@ function WorkspaceInner({
               ))}
             </div>
 
-            {canEdit &&
-              (isLockHolder ? (
-                <>
-                  <button className="btn btn-sm" onClick={() => void saveNow()}>
-                    Save
-                  </button>
-                  <button className="btn btn-sm" onClick={() => void stopEditing()}>
-                    <IconUnlock size={13} /> Stop editing
-                  </button>
-                  <button className="btn btn-sm btn-primary" onClick={() => void finalize()}>
-                    <IconCheck size={13} /> Finalize
-                  </button>
-                </>
-              ) : (
-                !doc.lock && (
-                  <button className="btn btn-sm btn-primary" onClick={() => void startEditing()}>
-                    <IconPencil size={13} /> Edit
-                  </button>
-                )
-              ))}
+            {canEdit && isLockHolder && (
+              <>
+                <button className="btn btn-sm" onClick={() => void saveNow()}>
+                  Save
+                </button>
+                <button className="btn btn-sm" onClick={() => void stopEditing()}>
+                  <IconUnlock size={13} /> Stop editing
+                </button>
+                <button className="btn btn-sm btn-primary" onClick={() => void finalize()}>
+                  <IconCheck size={13} /> Finalize
+                </button>
+              </>
+            )}
           </div>
           <EditorCanvas onSpanClick={onSpanClick} />
         </div>

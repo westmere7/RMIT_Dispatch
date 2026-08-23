@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { useSpanEntry } from './useSpanEntry';
 import type { TextBlock } from '../../types';
 import type { RichText } from '../../types';
 import { renderRichHTML, parseRichDOM, rangeFromSelection } from '../../lib/richdom';
@@ -19,18 +20,32 @@ export const InlineTextEditor = forwardRef<InlineEditorHandle, {
   block: TextBlock;
   onChange: (body: RichText) => void;
   onSpanClick?: (info: { fieldId: string; para: number; path: number[] }) => void;
-}>(function InlineTextEditor({ block, onChange, onSpanClick }, ref) {
+  /** Reports which embed is open for text editing, for the properties bar. */
+  onEnteredField?: (fieldId: string | null) => void;
+}>(function InlineTextEditor({ block, onChange, onSpanClick, onEnteredField }, ref) {
   const rootRef = useRef<HTMLDivElement>(null);
   const lastEmitted = useRef<string>('');
+  const { entered, enteredField, onDoubleClick, onClick } = useSpanEntry(rootRef);
+
+  // The hint belongs in the properties bar: pinned above the block it
+  // collided with whatever sat there, and the frame is not a reliable
+  // place to hang UI that must always be readable.
+  useEffect(() => {
+    onEnteredField?.(enteredField);
+  }, [enteredField, onEnteredField]);
+  useEffect(() => () => onEnteredField?.(null), [onEnteredField]);
 
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     const json = JSON.stringify(block.body);
-    if (json === lastEmitted.current) return;
-    lastEmitted.current = json;
-    el.innerHTML = renderRichHTML(block.body, true);
-  }, [block.body]);
+    // Stepping in or out changes which span is editable, so it has to
+    // re-render even when the body itself has not changed.
+    const key = `${json}|${entered ? `${entered.para}:${entered.path}` : ''}`;
+    if (key === lastEmitted.current) return;
+    lastEmitted.current = key;
+    el.innerHTML = renderRichHTML(block.body, true, block.size ?? 'md', entered);
+  }, [block.body, block.size, entered]);
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -54,7 +69,9 @@ export const InlineTextEditor = forwardRef<InlineEditorHandle, {
     const el = rootRef.current;
     if (!el) return;
     const parsed = parseRichDOM(el);
-    lastEmitted.current = JSON.stringify(parsed);
+    lastEmitted.current = `${JSON.stringify(parsed)}|${
+      entered ? `${entered.para}:${entered.path}` : ''
+    }`;
     onChange(parsed);
   };
 
@@ -67,7 +84,6 @@ export const InlineTextEditor = forwardRef<InlineEditorHandle, {
         color: block.color || undefined,
       }}
     >
-      {block.heading && <div className="block-heading">{block.heading}</div>}
       <div
         ref={rootRef}
         className="inline-editor-body"
@@ -79,14 +95,15 @@ export const InlineTextEditor = forwardRef<InlineEditorHandle, {
         aria-multiline="true"
         aria-label="Block text"
         onClick={(e) => {
+          onClick(e);
           if (!onSpanClick) return;
           const el = (e.target as HTMLElement).closest('[data-field]');
           if (!el || !rootRef.current?.contains(el)) return;
-          if (el.getAttribute('data-dir') !== 'down') return;
           const paras = Array.from(rootRef.current.querySelectorAll(':scope > [data-para]'));
           const para = Math.max(0, paras.findIndex((p) => p.contains(el)));
           onSpanClick({ fieldId: el.getAttribute('data-field')!, para, path: [] });
         }}
+        onDoubleClick={onDoubleClick}
         onKeyDown={(e) => {
           // Keep canvas shortcuts (delete/duplicate/nudge) out of the way.
           e.stopPropagation();

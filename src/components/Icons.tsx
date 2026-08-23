@@ -75,6 +75,14 @@ export const IconPlus = (p: P) => (
     <path d="M5 12h14M12 5v14" />
   </I>
 );
+/* Overflow menu: filled dots read better than 2px-stroked rings at 12px. */
+export const IconMore = (p: P) => (
+  <I {...p} strokeWidth={0}>
+    <circle cx="5" cy="12" r="2" fill="currentColor" />
+    <circle cx="12" cy="12" r="2" fill="currentColor" />
+    <circle cx="19" cy="12" r="2" fill="currentColor" />
+  </I>
+);
 export const IconMinus = (p: P) => (
   <I {...p}>
     <path d="M5 12h14" />

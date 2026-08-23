@@ -58,6 +58,8 @@ export interface TextNode {
   bold?: boolean;
   italic?: boolean;
   color?: string;
+  /** Per-run size. Absent means the block's own size. */
+  size?: TextSize;
 }
 
 export interface FieldSpan {
@@ -66,6 +68,16 @@ export interface FieldSpan {
   direction?: SyncDirection;
   /** Local mirror of the field value for rendering. */
   children: InlineNode[];
+  /* Character formatting for the whole embed. It lives on the span, not
+     on the children, because the children are rewritten from the field
+     value on every sync — a mark on them would not survive. This is also
+     what lets a field inserted mid-sentence inherit the surrounding
+     style. */
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+  /** Per-embed size, like a text run's. */
+  size?: TextSize;
 }
 
 export type InlineNode = TextNode | FieldSpan;
@@ -87,7 +99,12 @@ export interface BlockBinding {
   direction: SyncDirection;
 }
 
-export type TextSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+/**
+ * Seven steps, shown as XXS…XXL. The stored keys keep their original
+ * spellings (`sm`/`md`/`lg` label as S/M/L) so documents written before
+ * the scale grew still render at the same size — see lib/textsize.ts.
+ */
+export type TextSize = 'xxs' | 'xs' | 'sm' | 'md' | 'lg' | 'xl' | 'xxl';
 export type TextAlign = 'left' | 'center' | 'right';
 
 interface BlockBase {
@@ -98,6 +115,9 @@ interface BlockBase {
 
 export interface TextBlock extends BlockBase {
   type: 'text';
+  /** @deprecated Legacy separate heading. Folded into `body` on read
+   *  (see foldHeadings) and never written again — authors mark a heading
+   *  with formatting instead. */
   heading?: string;
   body: RichText;
   size?: TextSize;

@@ -98,6 +98,55 @@
   display: flex;
   flex-direction: column;
 }
+/* The main call to action in read mode: bigger than the toolbar buttons
+   around it, with a ring that settles once so the eye lands on it. */
+.btn-edit-cta {
+  height: 32px;
+  padding: 0 16px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  box-shadow:
+    0 0 0 3px rgba(230, 30, 42, 0.18),
+    var(--shadow-sm);
+  animation: edit-cta-in 420ms var(--ease);
+}
+.btn-edit-cta:hover {
+  box-shadow:
+    0 0 0 4px rgba(230, 30, 42, 0.26),
+    var(--shadow);
+}
+@keyframes edit-cta-in {
+  from {
+    transform: scale(0.94);
+    box-shadow: 0 0 0 0 rgba(230, 30, 42, 0);
+  }
+}
+.edit-cta-hint {
+  margin-left: 2px;
+}
+
+/* Overflow marker, as in Illustrator: a small red box with a plus in the
+   frame's bottom-right corner when the copy does not fit. */
+.overflow-mark {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: 2px 0 2px 0;
+  pointer-events: auto;
+  cursor: help;
+  z-index: 3;
+}
+
 .block-frame.editable {
   cursor: grab;
 }
@@ -182,6 +231,9 @@
   overflow: hidden;
   word-break: break-word;
 }
+.block-content.size-xxs {
+  font-size: 0.5em;
+}
 .block-content.size-xs {
   font-size: 0.65em;
 }
@@ -197,6 +249,10 @@
 .block-content.size-xl {
   font-size: 1.8em;
   line-height: 1.25;
+}
+.block-content.size-xxl {
+  font-size: 2.4em;
+  line-height: 1.15;
 }
 .block-content .block-heading {
   font-weight: 600;
@@ -299,7 +355,7 @@
 
 /* ---------- Side panels ---------- */
 .side-panel {
-  width: 280px;
+  width: calc(280px * var(--ui-scale));
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   display: flex;
@@ -308,7 +364,7 @@
 }
 .side-panel.left {
   /* Wide enough that the add-page buttons never clip. */
-  width: 200px;
+  width: calc(200px * var(--ui-scale));
   border-left: none;
   border-right: 1px solid var(--border);
 }
@@ -414,6 +470,15 @@
   border-bottom-color: var(--success);
   background: var(--success-wash);
 }
+.rt-entered {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-bottom: 4px;
+}
 .rt-compact .rt-content {
   min-height: 30px;
   padding: 4px 8px;
@@ -428,6 +493,8 @@
 }
 .inline-editor {
   cursor: text;
+  /* Anchors the "editing field" chip. */
+  position: relative;
 }
 .inline-editor-body {
   outline: none;
@@ -454,6 +521,40 @@
 }
 .inline-editor-body .field-span.dir-down {
   cursor: pointer;
+}
+
+/* ---------- Atomic vs stepped-into embeds ----------
+   While a text block is being edited every embed is one object: the
+   caret goes around it, never inside, so typing beside it cannot leak
+   in and two neighbours cannot merge. Double-clicking steps into one,
+   and that has to be unmistakable — otherwise you cannot tell whether
+   you are editing the block or the field. */
+.field-span.is-atomic {
+  cursor: default;
+  /* Signals "one thing", and stops a drag inside it from selecting
+     half an embed. */
+  user-select: all;
+}
+.field-span.is-entered {
+  cursor: text;
+  user-select: text;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 4px var(--accent-wash);
+  /* Solid, not dotted: this one is open for editing. */
+  border-bottom-style: solid !important;
+}
+
+/* Which field is open for editing. Lives in the properties bar: pinned
+   above the block it collided with whatever was rendered there. */
+.pb-entered {
+  gap: 4px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* "double-click to edit" affordance on a selected text block */
@@ -491,6 +592,74 @@
 .canvas-format-bar .icon-btn {
   width: 26px;
   height: 26px;
+}
+
+/* ---------- Contextual properties bar ---------- */
+.properties-bar {
+  /* One row that never wraps into a wall: the long-form editors are in
+     popovers, so what stays inline is always a single line's worth. */
+  min-height: 42px;
+  row-gap: 6px;
+}
+.properties-bar .btn-sm {
+  height: 26px;
+}
+.pb-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding-right: 2px;
+  white-space: nowrap;
+}
+.pb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* A pill that is also a button (the block's sync state). */
+.pb-pill-btn {
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: inherit;
+}
+.pb-pill-btn:hover {
+  border-color: var(--accent);
+}
+
+.pb-pop-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.pb-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  width: 270px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.pb-pop.wide {
+  width: 340px;
+}
+/* Keep popovers on screen when their button sits near the right edge. */
+.properties-bar > .pb-pop-wrap:nth-last-child(-n + 6) .pb-pop {
+  left: auto;
+  right: 0;
 }
 
 /* Zoom controls */

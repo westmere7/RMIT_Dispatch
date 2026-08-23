@@ -1,33 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  IconAlignCenter,
-  IconAlignLeft,
-  IconAlignRight,
-  IconBold,
   IconHand,
-  IconItalic,
   IconRedo,
   IconUndo,
   IconZoomIn,
   IconZoomOut,
 } from '../components/Icons';
 import { FieldEditorDialog } from '../components/editor/FieldEditorDialog';
-import { FieldMenu } from '../components/editor/FieldMenu';
 import type { InlineEditorHandle } from '../components/editor/InlineTextEditor';
 import { canvasAspect } from '../grid/presets';
-import { applyMark, rangeHasMark } from '../lib/richtext';
 import { useSize } from '../lib/useSize';
-import type { RichText, SyncField, TextAlign, TextSize } from '../types';
+import type { RichText, SyncField } from '../types';
 import type { SpanClickInfo } from './BlockFrame';
 import { CanvasContextMenu, type CanvasTarget } from './CanvasContextMenu';
 import { useEditor } from './EditorProvider';
 import { PageSurface } from './PageSurface';
 import { useDragResize } from './useDragResize';
+import { PropertiesBar } from './PropertiesBar';
 import { useZoomPan } from './useZoomPan';
 import './canvas.css';
 
 const STAGE_PAD = 64;
-const SIZES: TextSize[] = ['xs', 'sm', 'md', 'lg', 'xl'];
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -51,10 +44,10 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
   const [menu, setMenu] = useState<CanvasTarget | null>(null);
   const [fieldEdit, setFieldEdit] = useState<SyncField | null>(null);
   const { onBlockPointerDown, onHandlePointerDown } = useDragResize(surfaceRef);
-
   const editingId = state.editingBlockId;
-  const editingBlock =
-    currentPage?.blocks.find((b) => b.id === editingId && b.type === 'text') ?? null;
+  /** Which embed is open for text editing, shown in the properties bar. */
+  const [enteredField, setEnteredField] = useState<string | null>(null);
+
 
   // Keyboard shortcuts (ignored while typing in inputs/editors).
   useEffect(() => {
@@ -101,7 +94,16 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
   useEffect(() => {
     if (!editingId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') dispatch({ type: 'EDIT_TEXT', blockId: null });
+      if (e.key !== 'Escape') return;
+      /*
+       * A sync field opened for editing inside the block owns Escape
+       * first: leaving the embed is the more specific action, and a
+       * second Escape then leaves the block. This is checked against the
+       * DOM rather than by listener order — both listeners capture on
+       * `window`, where stopPropagation cannot hold off a sibling.
+       */
+      if (document.querySelector('.field-span.is-entered')) return;
+      dispatch({ type: 'EDIT_TEXT', blockId: null });
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -122,11 +124,9 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
     [currentPage, dispatch],
   );
 
-  const withRange = (fn: (r: NonNullable<ReturnType<InlineEditorHandle['getRange']>>) => void) => {
-    const r = inlineRef.current?.getRange();
-    if (!r || r.start === r.end) return;
-    fn(r);
-  };
+
+
+
 
   if (!currentPage) {
     return (
@@ -144,138 +144,8 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
 
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Formatting bar for the block being edited on the canvas. */}
-      {editingBlock && editingBlock.type === 'text' && (
-        <div className="canvas-format-bar">
-          <span className="text-xs muted" style={{ fontWeight: 600, marginRight: 2 }}>
-            TEXT
-          </span>
-          <button
-            className="icon-btn"
-            title="Bold"
-            aria-label="Bold"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() =>
-              withRange((r) =>
-                setBody(
-                  editingBlock.id,
-                  applyMark(editingBlock.body, r, {
-                    bold: !rangeHasMark(editingBlock.body, r, 'bold'),
-                  }),
-                ),
-              )
-            }
-          >
-            <IconBold size={13} />
-          </button>
-          <button
-            className="icon-btn"
-            title="Italic"
-            aria-label="Italic"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() =>
-              withRange((r) =>
-                setBody(
-                  editingBlock.id,
-                  applyMark(editingBlock.body, r, {
-                    italic: !rangeHasMark(editingBlock.body, r, 'italic'),
-                  }),
-                ),
-              )
-            }
-          >
-            <IconItalic size={13} />
-          </button>
-          <label className="icon-btn" title="Text colour" style={{ position: 'relative', cursor: 'pointer' }}>
-            <span
-              style={{
-                width: 13,
-                height: 13,
-                borderRadius: 3,
-                background:
-                  'conic-gradient(var(--rmit-red), var(--warning), var(--success), var(--accent), var(--rmit-red))',
-              }}
-            />
-            <input
-              type="color"
-              style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
-              aria-label="Text colour"
-              onMouseDown={(e) => e.stopPropagation()}
-              onChange={(e) =>
-                withRange((r) =>
-                  setBody(editingBlock.id, applyMark(editingBlock.body, r, { color: e.target.value })),
-                )
-              }
-            />
-          </label>
-
-          <span className="bar-sep" />
-          <div className="segmented" style={{ padding: 2 }}>
-            {SIZES.map((s) => (
-              <button
-                key={s}
-                className={(editingBlock.size ?? 'md') === s ? 'active' : ''}
-                style={{ height: 22, padding: '0 8px', fontSize: 11 }}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  dispatch({
-                    type: 'UPDATE_BLOCK',
-                    pageId: currentPage.id,
-                    blockId: editingBlock.id,
-                    patch: { size: s },
-                  })
-                }
-              >
-                {s.toUpperCase()}
-              </button>
-            ))}
-          </div>
-
-          <span className="bar-sep" />
-          <div className="segmented" style={{ padding: 2 }}>
-            {(
-              [
-                ['left', IconAlignLeft],
-                ['center', IconAlignCenter],
-                ['right', IconAlignRight],
-              ] as [TextAlign, typeof IconAlignLeft][]
-            ).map(([a, Icon]) => (
-              <button
-                key={a}
-                className={(editingBlock.align ?? 'left') === a ? 'active' : ''}
-                style={{ height: 22, padding: '0 7px' }}
-                aria-label={`Align ${a}`}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  dispatch({
-                    type: 'UPDATE_BLOCK',
-                    pageId: currentPage.id,
-                    blockId: editingBlock.id,
-                    patch: { align: a },
-                  })
-                }
-              >
-                <Icon size={12} />
-              </button>
-            ))}
-          </div>
-
-          <span className="bar-sep" />
-          <FieldMenu
-            compact
-            getRange={() => inlineRef.current?.getRange() ?? null}
-            rich={editingBlock.body}
-            onRich={(body) => setBody(editingBlock.id, body)}
-          />
-          <button
-            className="btn btn-sm"
-            style={{ height: 24, marginLeft: 'auto' }}
-            onClick={() => dispatch({ type: 'EDIT_TEXT', blockId: null })}
-          >
-            Done
-          </button>
-        </div>
-      )}
+      {/* One contextual bar for everything about the selection. */}
+      <PropertiesBar enteredField={enteredField} />
 
       <div
         className={`stage ${panning ? 'panning' : ''} ${panReady ? 'pan-ready' : ''}`}
@@ -298,6 +168,7 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
             onBlockPointerDown={onBlockPointerDown}
             onHandlePointerDown={onHandlePointerDown}
               onSpanClick={onSpanClick}
+              onEnteredField={setEnteredField}
             onStartEdit={(blockId) => dispatch({ type: 'EDIT_TEXT', blockId })}
             onBodyChange={setBody}
             onBlockContextMenu={(e, blockId, fieldId) => {

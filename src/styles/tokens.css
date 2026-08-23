@@ -9,15 +9,22 @@
   --rmit-red: #e61e2a;
   --rmit-navy: #000054;
 
+  /* Interface scale, from the account's setting. Type, spacing and the
+     shell's structural sizes all derive from it, so the whole app grows
+     together — and because every value stays in layout pixels, none of
+     the editor's rect/scroll maths changes meaning (a CSS `zoom` would
+     have put client rects and scrollLeft into different units). */
+  --ui-scale: 1;
+
   /* Spacing scale 1..8 → 4/8/12/16/24/32/48/64 */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-  --space-8: 64px;
+  --space-1: calc(4px * var(--ui-scale));
+  --space-2: calc(8px * var(--ui-scale));
+  --space-3: calc(12px * var(--ui-scale));
+  --space-4: calc(16px * var(--ui-scale));
+  --space-5: calc(24px * var(--ui-scale));
+  --space-6: calc(32px * var(--ui-scale));
+  --space-7: calc(48px * var(--ui-scale));
+  --space-8: calc(64px * var(--ui-scale));
 
   /* Radius */
   --radius-sm: 6px;
@@ -30,11 +37,11 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Type scale — compact & crisp */
-  --fs-xs: 12px;
-  --fs-sm: 13px;
-  --fs-md: 14px;
-  --fs-lg: 16px;
-  --fs-xl: 20px;
+  --fs-xs: calc(12px * var(--ui-scale));
+  --fs-sm: calc(13px * var(--ui-scale));
+  --fs-md: calc(14px * var(--ui-scale));
+  --fs-lg: calc(16px * var(--ui-scale));
+  --fs-xl: calc(20px * var(--ui-scale));
   --font:
     "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
 }

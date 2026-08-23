@@ -97,9 +97,28 @@ function readLocal(): UserSettings {
   return DEFAULT_SETTINGS;
 }
 
+function sameSettings(a: UserSettings, b: UserSettings): boolean {
+  return (Object.keys(DEFAULT_SETTINGS) as (keyof UserSettings)[]).every((k) => a[k] === b[k]);
+}
+
 interface SettingsCtx {
+  /** What the app runs on: the draft, so edits preview live. */
   settings: UserSettings;
+  /** What is actually stored, for Discard and the dirty check. */
+  saved: UserSettings;
+  /** Edit the draft. Nothing is written until `save()`. */
   update: (patch: Partial<UserSettings>) => void;
+  /** Draft differs from what is stored. */
+  dirty: boolean;
+  /**
+   * Commit the draft. An override commits a value straight away without
+   * going through the draft first — used by one-click controls like the
+   * top-bar theme toggle, which have no Save button of their own.
+   */
+  save: (override?: Partial<UserSettings>) => Promise<void>;
+  /** Throw the draft away and go back to the stored values. */
+  discard: () => void;
+  /** Load the defaults into the draft (still needs saving). */
   reset: () => void;
   loading: boolean;
   saving: boolean;
@@ -107,7 +126,11 @@ interface SettingsCtx {
 
 const Ctx = createContext<SettingsCtx>({
   settings: DEFAULT_SETTINGS,
+  saved: DEFAULT_SETTINGS,
   update: () => {},
+  dirty: false,
+  save: async () => {},
+  discard: () => {},
   reset: () => {},
   loading: false,
   saving: false,
@@ -115,10 +138,17 @@ const Ctx = createContext<SettingsCtx>({
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  const [settings, setSettings] = useState<UserSettings>(readLocal);
+  /**
+   * Two copies: `saved` is what is stored, `draft` is what the app runs
+   * on. Editing only touches the draft, so appearance changes preview
+   * immediately while Save/Discard still mean something.
+   */
+  const [saved, setSaved] = useState<UserSettings>(readLocal);
+  const [draft, setDraft] = useState<UserSettings>(saved);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const timer = useRef<number | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   // Pull the account's settings once signed in; the local mirror has
   // already painted, so this only reconciles.
@@ -134,7 +164,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         .maybeSingle();
       if (!cancelled) {
         if (!error && data?.settings) {
-          setSettings(clampSettings({ ...DEFAULT_SETTINGS, ...data.settings }));
+          const next = clampSettings({ ...DEFAULT_SETTINGS, ...data.settings });
+          setSaved(next);
+          // Don't stomp on edits the user started before this landed.
+          if (sameSettings(draftRef.current, readLocal())) setDraft(next);
         }
         setLoading(false);
       }
@@ -144,56 +177,58 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     };
   }, [user]);
 
-  // Mirror locally at once, and upsert to the account debounced.
-  const persist = useCallback(
-    (next: UserSettings) => {
-      try {
-        localStorage.setItem(LS_KEY, JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
-      if (!user) return;
-      if (timer.current !== null) window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => {
-        setSaving(true);
-        void supabase
-          .from('user_settings')
-          .upsert({ user_id: user.uid, settings: next }, { onConflict: 'user_id' })
-          .then(({ error }) => {
-            if (error) console.warn('settings save failed', error.message);
-            setSaving(false);
-          });
-      }, 400);
+  const update = useCallback((patch: Partial<UserSettings>) => {
+    setDraft((prev) => clampSettings({ ...prev, ...patch }));
+  }, []);
+
+  /** Commit the draft: local mirror first, then the account. */
+  const save = useCallback(
+    async (override?: Partial<UserSettings>) => {
+    const next = override ? clampSettings({ ...draftRef.current, ...override }) : draftRef.current;
+    if (override) setDraft(next);
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+    setSaved(next);
+    if (!user) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert({ user_id: user.uid, settings: next }, { onConflict: 'user_id' });
+    if (error) console.warn('settings save failed', error.message);
+    setSaving(false);
     },
     [user],
   );
 
-  const update = useCallback(
-    (patch: Partial<UserSettings>) => {
-      setSettings((prev) => {
-        const next = clampSettings({ ...prev, ...patch });
-        persist(next);
-        return next;
-      });
-    },
-    [persist],
-  );
+  const discard = useCallback(() => setDraft(saved), [saved]);
+  const reset = useCallback(() => setDraft(DEFAULT_SETTINGS), []);
 
-  const reset = useCallback(() => {
-    setSettings(DEFAULT_SETTINGS);
-    persist(DEFAULT_SETTINGS);
-  }, [persist]);
-
-  // Apply the settings that affect the whole shell.
+  // Apply the settings that affect the whole shell — from the draft, so
+  // scale and motion preview before they are saved.
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty('--ui-scale', String(settings.uiScale / 100));
-    root.setAttribute('data-reduce-motion', settings.reduceMotion ? 'true' : 'false');
-  }, [settings.uiScale, settings.reduceMotion]);
+    root.style.setProperty('--ui-scale', String(draft.uiScale / 100));
+    root.setAttribute('data-reduce-motion', draft.reduceMotion ? 'true' : 'false');
+  }, [draft.uiScale, draft.reduceMotion]);
+
+  const dirty = !sameSettings(draft, saved);
 
   const value = useMemo(
-    () => ({ settings, update, reset, loading, saving }),
-    [settings, update, reset, loading, saving],
+    () => ({
+      settings: draft,
+      saved,
+      update,
+      dirty,
+      save,
+      discard,
+      reset,
+      loading,
+      saving,
+    }),
+    [draft, saved, update, dirty, save, discard, reset, loading, saving],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

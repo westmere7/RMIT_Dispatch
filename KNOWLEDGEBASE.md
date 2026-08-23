@@ -91,6 +91,63 @@ src/
 - **Grids may only be refined, never coarsened**, per document. Coarsening
   throws away layout precision the blocks depend on. Refining rescales blocks.
 
+### Properties live in a bar, not a panel
+- **`editor/PropertiesBar.tsx`** is the single contextual bar above the canvas.
+  It replaced both the old text format bar and the right-hand Properties tab,
+  so the controls sit next to what they act on. The side panel is now Sync /
+  Versions / Comments only (`InspectorTab` no longer has `'properties'`).
+- What it shows: page summary with nothing selected · `N selected` with
+  Front/Duplicate/Delete for a multi-selection · for one block, its kind, its
+  sync state (make field / use existing / unlink / jump to Sync), the
+  type-specific controls, then z-order, duplicate and delete.
+- **Long-form editors live in popovers** anchored to a bar button — table
+  cells, image upload/alt/caption, shape styling — so nothing was lost in the
+  move but the bar stays one row. The sections themselves were moved intact
+  into `components/editor/BlockProps.tsx` and are shared.
+- While text is being edited on the canvas the bar follows the *edited* block,
+  not the selection, so formatting never retargets mid-edit.
+- **In view-only mode the bar is not rendered at all.** Nothing in it works
+  without the lock, so hiding it beats dimming it: no dead controls to explain,
+  no way to open the popovers, and the canvas gets the row back.
+
+### Text formatting
+- **Character-level, word-processor rules.** Marks apply to the selected
+  characters; with no selection they apply to the whole block. `bold`,
+  `italic`, `color` and `size` are all runs marks (`MarkPatch`).
+- **Seven sizes, XXS…XXL** (`0.5 / 0.65 / 0.8 / 1 / 1.35 / 1.8 / 2.4` em).
+  The stored keys deliberately do NOT match their labels — `sm`/`md`/`lg`
+  predate the wider scale and show as S/M/L — because renaming them would have
+  meant migrating every block and every run mark in every document for nothing.
+  `SIZE_LABEL` does the translation; never hand-write a label from the key.
+- **Per-run size is absolute, not relative.** A run marked L renders at
+  `SIZE_EM[run] / SIZE_EM[block]` ems, so it looks the same whatever the
+  block's own size is. `SIZE_EM` in `lib/textsize.ts` mirrors the
+  `.block-content.size-*` CSS — keep the two in step.
+- **Marks on a FieldSpan live on the span, not its children.** The children
+  are rewritten from the field value on every sync, so a mark on them cannot
+  survive; a mark on the span can. This is also what makes a field inserted
+  mid-sentence inherit the surrounding style (`insertFieldAt` merges the marks
+  at the insertion point, `wrapField` hoists the selection's shared marks).
+  Consequence: selecting *part* of a synced span and formatting it styles the
+  whole embed — the smallest unit that is durable.
+- **The selection survives a formatting change.** Marking re-renders the
+  editor's HTML, which drops the DOM selection — so every mark used to need
+  the words re-selected. `restoreSelectionSoon` puts it back by *offset*
+  (marking never changes the text), verifying and retrying for a few frames
+  because the re-render happens in a React effect, not synchronously.
+- **Formatting follows the live selection wherever it is.** `rangeFromSelection`
+  is a pure function of the DOM selection plus a root, so the properties panel
+  resolves its range against the on-canvas editor for the same block
+  (`liveRangeFor`). Without that, panel buttons silently formatted the whole
+  block while the user had text selected on the canvas.
+- **Text blocks have no separate heading.** A heading is text the author made
+  bigger or bolder. Legacy `heading` strings are folded into the body as a
+  bold, one-step-larger first paragraph by `foldHeadings`, applied where drafts
+  and version snapshots are read.
+- **Overflow marker**: `.block-content` clips, so `scrollHeight > clientHeight`
+  means the copy does not fit; a small red `+` sits in the frame's bottom-right,
+  the way Illustrator marks an overflowing text frame.
+
 ### Sync fields
 - Field values are **plain content** — `stripMarks` runs inside
   `store/fields.ts` on create and update, so no field can ever store
@@ -115,6 +172,20 @@ src/
 
 - Incompatible fields stay **visible but disabled with a reason** — hiding them
   made the rule feel like a bug.
+- **A whole block can become a field with no text selection**: the block's own
+  content is the value and the field takes the block's shape (text → text,
+  table → table, image → image). Entry points: the sync panel's card for a
+  single unbound block, and the canvas context menu. Both funnel through
+  `createFieldFromBlock` in `useFieldOps`. Multi-selection is refused on
+  purpose — one block at a time.
+- The panel list shows **name, shape, usage count** and one overflow button;
+  the value, usages and actions all live behind a click. Rows for the fields
+  the selection touches (the caret's span, the selected block's binding, and
+  anything embedded inside it) are **highlighted**, and a collapsed folder
+  marks that something inside it is selected.
+- Usage counts come from the **live pages** for the open document plus a fetch
+  for the project's other documents — counting from the fetch alone went stale
+  the moment anything was edited.
 
 ### Data tables
 - The sync-field table is **one grid shared by the header and every row**
@@ -165,6 +236,16 @@ src/
 ### Settings
 - Per account in `user_settings.settings` (jsonb), mirrored to localStorage so
   first paint never waits on the network.
+- **Two copies: `saved` and `draft`.** The app runs on the draft, so appearance
+  changes preview immediately, while Save/Discard still mean something. One-click
+  controls that have no Save button of their own (the top-bar theme toggle) call
+  `save({...})` with an override, which commits without going through the draft.
+- **Interface scale scales the tokens**, not a CSS `zoom`: `--fs-*` and
+  `--space-*` are `calc(Npx * var(--ui-scale))`, plus the shell's structural
+  sizes. `zoom` would have put `getBoundingClientRect` (visual px) and
+  `scrollLeft` (layout px) into different units and broken the editor's
+  zoom-anchoring maths. A root `font-size` alone did nothing, because every
+  token is an absolute px value.
 - **Layout is desktop two-pane**: a section rail on the left, one pane at a
   time on the right. This is a desktop app — pages fill the window rather than
   sitting in a narrow phone-width column, and only genuine reading columns
@@ -207,18 +288,21 @@ src/
    `SECURITY DEFINER` helpers (`is_space_member`, `can_edit_space`).
 7. **`useSize` must ignore 0×0** ResizeObserver deliveries or dependent layouts
    collapse.
-8. **Submenus need hover *intent* before switching.** The pointer normally
+8. **`preventDefault` must come before the `e.repeat` guard.** The space-hold
+   pan mode bailed out on auto-repeat keydowns *before* cancelling them, so a
+   HELD space scrolled the page even though the first press was swallowed.
+9. **Submenus need hover *intent* before switching.** The pointer normally
    reaches a submenu by cutting diagonally across the rows *below* its own row.
    Opening the hovered row's submenu instantly therefore unmounts the panel the
    pointer is travelling to. The switch is delayed by `SWITCH_DELAY_MS` (220ms);
    because only one submenu is ever open, the delay cannot bring back the old
    overlapping-panels bug.
-9. **PostgREST has its own missing-column error.** A write to a column the
+10. **PostgREST has its own missing-column error.** A write to a column the
    database does not have yet is rejected by PostgREST *before* Postgres sees
    it — code `PGRST204`, message "Could not find the 'x' column ... in the
    schema cache", not Postgres's `42703` / "does not exist". `isMissingColumn`
    matches both, otherwise a behind-the-app database fails silently.
-10. **Testing with synthetic events lies.** React's `onMouseEnter` derives from
+11. **Testing with synthetic events lies.** React's `onMouseEnter` derives from
    `mouseover` with `relatedTarget`; synthetic dispatches do not reproduce
    enter/leave semantics. Use real pointer moves (`computer` hover/drag) for
    hover and drag behaviour. Also: reading the DOM in the *same* JS call that

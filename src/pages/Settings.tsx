@@ -101,7 +101,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 
 export function Settings() {
   const { setCrumbs } = useCrumbs();
-  const { settings, update, reset, saving } = useSettings();
+  const { settings, update, reset, save, discard, dirty, saving } = useSettings();
   const { user } = useAuth();
   const dialog = useDialog();
   const [scale, setScale] = useState(settings.uiScale);
@@ -140,9 +140,10 @@ export function Settings() {
         <button
           className="btn"
           onClick={async () => {
-            const ok = await dialog.confirm('Reset all settings?', {
-              message: 'Everything goes back to its default value.',
-              confirmLabel: 'Reset',
+            const ok = await dialog.confirm('Reset all settings to defaults?', {
+              message:
+                'Every value goes back to its default. Nothing is written until you press Save.',
+              confirmLabel: 'Load defaults',
             });
             if (ok) reset();
           }}
@@ -150,6 +151,28 @@ export function Settings() {
           Reset to defaults
         </button>
       </header>
+
+      {/* Changes preview live but are only written on Save, so the bar
+          stays visible while anything is unsaved. */}
+      <div className={`settings-bar ${dirty ? 'dirty' : ''}`} role="status">
+        <span className="settings-bar-text">
+          {saving
+            ? 'Saving…'
+            : dirty
+              ? 'Unsaved changes — previewing now, not yet saved to your account.'
+              : 'All changes saved to your account.'}
+        </span>
+        <button className="btn btn-sm" disabled={!dirty || saving} onClick={discard}>
+          Discard
+        </button>
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={!dirty || saving}
+          onClick={() => void save()}
+        >
+          Save changes
+        </button>
+      </div>
 
       <div className="settings-shell">
         <nav className="settings-nav" aria-label="Settings sections">

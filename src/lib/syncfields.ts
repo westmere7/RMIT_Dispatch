@@ -192,7 +192,6 @@ export function copyBlockContent(target: Block, source: Block): Block {
   if (target.type === 'text' && source.type === 'text') {
     return {
       ...target,
-      heading: source.heading,
       body: cloneRich(source.body),
       size: source.size,
       align: source.align,
