@@ -40,10 +40,11 @@ export const IconUsers = (p: P) => (
     <path d="M16 3.13a4 4 0 0 1 0 7.75" />
   </I>
 );
+/** Proper gear, not a sunburst. */
 export const IconSettings = (p: P) => (
   <I {...p}>
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
     <circle cx="12" cy="12" r="3" />
-    <path d="M12 1v3m0 16v3M4.2 4.2l2.1 2.1m11.4 11.4 2.1 2.1M1 12h3m16 0h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" />
   </I>
 );
 export const IconSun = (p: P) => (
@@ -72,6 +73,11 @@ export const IconSearch = (p: P) => (
 export const IconPlus = (p: P) => (
   <I {...p}>
     <path d="M5 12h14M12 5v14" />
+  </I>
+);
+export const IconMinus = (p: P) => (
+  <I {...p}>
+    <path d="M5 12h14" />
   </I>
 );
 export const IconChevronDown = (p: P) => (
@@ -265,6 +271,66 @@ export const IconSendBack = (p: P) => (
   <I {...p}>
     <rect x="4" y="4" width="12" height="12" rx="2" />
     <path d="M20 8v10a2 2 0 0 1-2 2H8" />
+  </I>
+);
+export const IconUndo = (p: P) => (
+  <I {...p}>
+    <path d="M9 14 4 9l5-5" />
+    <path d="M4 9h10.5A5.5 5.5 0 0 1 20 14.5 5.5 5.5 0 0 1 14.5 20H11" />
+  </I>
+);
+export const IconRedo = (p: P) => (
+  <I {...p}>
+    <path d="m15 14 5-5-5-5" />
+    <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5 5.5 5.5 0 0 0 9.5 20H13" />
+  </I>
+);
+export const IconFit = (p: P) => (
+  <I {...p}>
+    <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+  </I>
+);
+export const IconHand = (p: P) => (
+  <I {...p}>
+    <path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8" />
+    <path d="M6 14a8 8 0 0 0 8 8h1a7 7 0 0 0 7-7v-4a2 2 0 0 0-4 0" />
+  </I>
+);
+export const IconSliders = (p: P) => (
+  <I {...p}>
+    <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3" />
+    <path d="M1 14h6M9 8h6M17 16h6" />
+  </I>
+);
+export const IconShapes = (p: P) => (
+  <I {...p}>
+    <rect x="3" y="12" width="9" height="9" rx="1" />
+    <circle cx="16" cy="7.5" r="4.5" />
+  </I>
+);
+export const IconCircle = (p: P) => (
+  <I {...p}>
+    <circle cx="12" cy="12" r="9" />
+  </I>
+);
+export const IconSquare = (p: P) => (
+  <I {...p}>
+    <rect x="4" y="4" width="16" height="16" rx="1.5" />
+  </I>
+);
+export const IconLine = (p: P) => (
+  <I {...p}>
+    <path d="M4 20 20 4" />
+  </I>
+);
+export const IconArrowRight = (p: P) => (
+  <I {...p}>
+    <path d="M4 12h15m0 0-6-6m6 6-6 6" />
+  </I>
+);
+export const IconTriangle = (p: P) => (
+  <I {...p}>
+    <path d="M12 3l9 17H3z" />
   </I>
 );
 export const IconDot = (p: P) => (

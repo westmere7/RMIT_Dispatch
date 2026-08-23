@@ -1,23 +1,26 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useEditorOptional } from '../../editor/EditorProvider';
 import { useWorkspaceOptional } from '../../editor/workspaceContext';
-import { cloneRich, emptyRich, plainText } from '../../lib/richtext';
-import { collectUsages, valueAsRich, valueAsTable } from '../../lib/syncfields';
+import { normalizeFolder } from '../../lib/fieldtree';
+import { fieldShapeLabel } from '../../lib/fieldtypes';
+import { cloneRich } from '../../lib/richtext';
+import { collectUsages, valueMediaPaths } from '../../lib/syncfields';
 import { useAuth } from '../../store/auth';
 import { renameField, setFieldFolder, setFieldScope, updateFieldValue } from '../../store/fields';
-import { allFolderPaths, normalizeFolder } from '../../lib/fieldtree';
-import type { FieldScope, FieldValue, RichText, SyncField } from '../../types';
-import { IconTable, IconX } from '../Icons';
-import { RichTextEditor, type RichTextEditorHandle } from './RichTextEditor';
+import { deleteMediaMany } from '../../store/media';
+import { useSpaces } from '../../store/spaces';
+import type { FieldPart, FieldScope, FieldValue, RichText, SyncField } from '../../types';
+import { IconX } from '../Icons';
+import { shapeIcon } from './FieldPeek';
+import { FolderField } from './FolderField';
+import { GroupEditor, ImageEditor, TableEditor } from './FieldValueEditor';
+import { RichTextEditor } from './RichTextEditor';
 
 /**
- * Edit a sync field's canonical value in isolation. Saving writes the
- * field itself, so every document embedding it updates downstream —
- * no need to open the documents that use it.
- *
- * Simple fields (a line or paragraphs of rich text) edit as text.
- * Table fields expose every cell, with header toggle and row/column
- * editing, so the whole structure stays editable in the right format.
+ * Edit a sync field's canonical value in isolation. Which controls appear
+ * depends on the field's kind — a value, flowing text, a table, an image,
+ * or a combination of those. Saving writes the field itself, so every
+ * document embedding it updates without being opened.
  */
 export function FieldEditorDialog({
   field,
@@ -28,60 +31,47 @@ export function FieldEditorDialog({
 }: {
   field: SyncField;
   onClose: () => void;
-  /** Called after a successful save (used by the external manager). */
   onSaved?: () => void;
-  /** Field list used to suggest existing folders. */
   allFields?: SyncField[];
-  /** Project a field falls back into when demoted from global. */
   projectId?: string | null;
 }) {
   const ws = useWorkspaceOptional();
   const state = useEditorOptional()?.state ?? null;
   const { user } = useAuth();
-  const knownFolders = allFolderPaths(allFields ?? ws?.fields ?? []);
+  const { currentSpace } = useSpaces();
+  const spaceId = field.spaceId || currentSpace?.id || '';
 
-  const initialTable = valueAsTable(field.value);
   const [name, setName] = useState(field.name);
-  const [rich, setRich] = useState<RichText>(() =>
-    initialTable ? emptyRich() : cloneRich(valueAsRich(field.value)),
-  );
-  const [table, setTable] = useState(() =>
-    initialTable
-      ? { headerRow: initialTable.headerRow, rows: initialTable.rows.map((r) => r.map(cloneRich)) }
-      : null,
-  );
-  const [busy, setBusy] = useState(false);
   const [scope, setScope] = useState<FieldScope>(field.scope);
   const [folder, setFolder] = useState(field.folder);
-  const editorRef = useRef<RichTextEditorHandle>(null);
+  const [value, setValue] = useState<FieldValue>(() => cloneValue(field.value));
+  const [busy, setBusy] = useState(false);
 
   const usageCount = useMemo(
     () => (state ? collectUsages(state.pages).filter((u) => u.fieldId === field.id).length : 0),
     [state, field.id],
   );
 
-  const isScalar = field.value.kind === 'scalar';
+  const wide = value.kind === 'table' || value.kind === 'group';
 
   const save = async () => {
     if (!user) return;
     setBusy(true);
     try {
-      const value: FieldValue = table
-        ? { kind: 'table', headerRow: table.headerRow, rows: table.rows }
-        : isScalar
-          ? { kind: 'scalar', text: plainText(rich) }
-          : { kind: 'richtext', rich };
       await updateFieldValue(field.id, value, user.uid);
-      if (name.trim() && name.trim() !== field.name) {
-        await renameField(field.id, name.trim());
-      }
+      if (name.trim() && name.trim() !== field.name) await renameField(field.id, name.trim());
+
       const cleanFolder = normalizeFolder(folder);
       if (cleanFolder !== field.folder) await setFieldFolder(field.id, cleanFolder);
       if (scope !== field.scope) {
-        // Demoting to local needs a home project; fall back to the one we
-        // were opened from.
         await setFieldScope(field.id, scope, projectId ?? field.projectId ?? null);
       }
+
+      // Any image dropped during this edit is now unreferenced.
+      const before = valueMediaPaths(field.value);
+      const after = new Set(valueMediaPaths(value));
+      await deleteMediaMany(before.filter((p) => !after.has(p)));
+
       ws?.setFields((prev) =>
         prev.map((f) =>
           f.id === field.id
@@ -104,41 +94,12 @@ export function FieldEditorDialog({
     }
   };
 
-  /* ---------- table helpers ---------- */
-  const nCols = table?.rows[0]?.length ?? 0;
-
-  const setCell = (r: number, c: number, value: RichText) =>
-    setTable((t) =>
-      t ? { ...t, rows: t.rows.map((row, ri) => row.map((cell, ci) => (ri === r && ci === c ? value : cell))) } : t,
-    );
-
-  const addRow = () =>
-    setTable((t) =>
-      t ? { ...t, rows: [...t.rows, Array.from({ length: nCols || 1 }, () => emptyRich())] } : t,
-    );
-  const removeRow = (r: number) =>
-    setTable((t) => (t && t.rows.length > 1 ? { ...t, rows: t.rows.filter((_, i) => i !== r) } : t));
-  const addCol = () =>
-    setTable((t) => (t ? { ...t, rows: t.rows.map((row) => [...row, emptyRich()]) } : t));
-  const removeCol = (c: number) =>
-    setTable((t) =>
-      t && nCols > 1 ? { ...t, rows: t.rows.map((row) => row.filter((_, i) => i !== c)) } : t,
-    );
-
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: table ? 780 : 520 }}>
+      <div className="modal" style={{ maxWidth: wide ? 800 : 560 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <span className="pill pill-accent">
-            {table ? (
-              <>
-                <IconTable size={11} /> table field
-              </>
-            ) : isScalar ? (
-              'value field'
-            ) : (
-              'text field'
-            )}
+            {shapeIcon(value)} {fieldShapeLabel(value)} field
           </span>
           <h2 style={{ flex: 1 }}>Edit sync field</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
@@ -186,112 +147,16 @@ export function FieldEditorDialog({
           </div>
         </div>
 
-        <div className="field" style={{ marginBottom: 14 }}>
-          <label htmlFor="fe-folder">Folder</label>
-          <input
+        <div style={{ marginBottom: 14 }}>
+          <FolderField
             id="fe-folder"
-            className="input"
-            list="fe-folder-list"
-            placeholder="Root — or e.g. Pricing/2026"
             value={folder}
-            onChange={(e) => setFolder(e.target.value)}
+            fields={allFields ?? ws?.fields ?? []}
+            onChange={setFolder}
           />
-          <datalist id="fe-folder-list">
-            {knownFolders.map((f) => (
-              <option key={f} value={f} />
-            ))}
-          </datalist>
-          <span className="muted text-xs">
-            Use “/” to nest. Leave empty to keep the field at the root.
-          </span>
         </div>
 
-        {table ? (
-          <div className="field">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ flex: 1 }}>
-                Cells ({table.rows.length}×{nCols})
-              </span>
-              <label className="text-xs muted" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <input
-                  type="checkbox"
-                  checked={table.headerRow}
-                  onChange={(e) => setTable((t) => (t ? { ...t, headerRow: e.target.checked } : t))}
-                />
-                header row
-              </label>
-            </label>
-
-            <div style={{ overflow: 'auto', maxHeight: 340, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-              <table className="field-grid">
-                <tbody>
-                  {table.rows.map((row, r) => (
-                    <tr key={r}>
-                      <td className="field-grid-gutter">
-                        <button
-                          className="icon-btn"
-                          style={{ width: 20, height: 20 }}
-                          title={`Delete row ${r + 1}`}
-                          aria-label={`Delete row ${r + 1}`}
-                          disabled={table.rows.length <= 1}
-                          onClick={() => removeRow(r)}
-                        >
-                          −
-                        </button>
-                      </td>
-                      {row.map((cell, c) => (
-                        <td key={c} className={table.headerRow && r === 0 ? 'is-header' : ''}>
-                          <FieldCellEditor value={cell} onChange={(v) => setCell(r, c, v)} />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                  <tr>
-                    <td className="field-grid-gutter" />
-                    {Array.from({ length: nCols }, (_, c) => (
-                      <td key={c} className="field-grid-gutter">
-                        <button
-                          className="icon-btn"
-                          style={{ width: 20, height: 20 }}
-                          title={`Delete column ${c + 1}`}
-                          aria-label={`Delete column ${c + 1}`}
-                          disabled={nCols <= 1}
-                          onClick={() => removeCol(c)}
-                        >
-                          −
-                        </button>
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-              <button className="btn btn-sm" onClick={addRow}>
-                + Row
-              </button>
-              <button className="btn btn-sm" onClick={addCol}>
-                + Column
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="field">
-            <label>Value</label>
-            <RichTextEditor
-              ref={editorRef}
-              value={rich}
-              onChange={setRich}
-              compact={isScalar}
-            />
-            <p className="muted text-xs" style={{ marginTop: 4 }}>
-              Plain content only — bold, italic and colour come from the block that embeds this
-              field, never from the field itself.
-              {!isScalar && ' Nested fields keep syncing from their own definitions.'}
-            </p>
-          </div>
-        )}
+        <ValueEditor value={value} spaceId={spaceId} onChange={setValue} />
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
           <button className="btn" onClick={onClose}>
@@ -306,12 +171,94 @@ export function FieldEditorDialog({
   );
 }
 
-/** One table cell: a compact rich-text editor keeping inline formatting. */
-function FieldCellEditor({ value, onChange }: { value: RichText; onChange: (v: RichText) => void }) {
-  const ref = useRef<RichTextEditorHandle>(null);
-  return (
-    <div className="field-cell">
-      <RichTextEditor ref={ref} value={value} onChange={onChange} compact />
-    </div>
-  );
+/** The right editor for whatever this field holds. */
+export function ValueEditor({
+  value,
+  spaceId,
+  onChange,
+}: {
+  value: FieldValue;
+  spaceId: string;
+  onChange: (v: FieldValue) => void;
+}) {
+  switch (value.kind) {
+    case 'scalar':
+      return (
+        <div className="field">
+          <label htmlFor="fe-scalar">Value</label>
+          <input
+            id="fe-scalar"
+            className="input"
+            value={value.text}
+            onChange={(e) => onChange({ kind: 'scalar', text: e.target.value })}
+            placeholder="A word, number or short phrase"
+          />
+          <span className="muted text-xs">
+            A single line of plain text — ideal for a year, price or name.
+          </span>
+        </div>
+      );
+
+    case 'richtext':
+      return (
+        <div className="field">
+          <label>Text</label>
+          <RichTextEditor
+            value={value.rich}
+            onChange={(rich: RichText) => onChange({ kind: 'richtext', rich })}
+          />
+          <span className="muted text-xs">
+            Plain content only — styling comes from the block that embeds this field. Nested fields
+            keep syncing from their own definitions.
+          </span>
+        </div>
+      );
+
+    case 'table':
+      return (
+        <TableEditor
+          table={value}
+          onChange={(t) => onChange({ kind: 'table', headerRow: t.headerRow, rows: t.rows })}
+        />
+      );
+
+    case 'image':
+      return (
+        <ImageEditor
+          image={value}
+          spaceId={spaceId}
+          onChange={(img) => onChange({ kind: 'image', ...img })}
+        />
+      );
+
+    case 'group':
+      return (
+        <GroupEditor
+          parts={value.parts}
+          spaceId={spaceId}
+          onChange={(parts: FieldPart[]) => onChange({ kind: 'group', parts })}
+        />
+      );
+  }
+}
+
+/** Deep copy so edits stay cancellable. */
+function cloneValue(v: FieldValue): FieldValue {
+  if (v.kind === 'richtext') return { kind: 'richtext', rich: cloneRich(v.rich) };
+  if (v.kind === 'table') {
+    return { kind: 'table', headerRow: v.headerRow, rows: v.rows.map((r) => r.map(cloneRich)) };
+  }
+  if (v.kind === 'group') {
+    return {
+      kind: 'group',
+      parts: v.parts.map((p) =>
+        p.kind === 'text'
+          ? { ...p, rich: cloneRich(p.rich) }
+          : p.kind === 'table'
+            ? { ...p, rows: p.rows.map((r) => r.map(cloneRich)) }
+            : { ...p },
+      ),
+    };
+  }
+  return { ...v };
 }

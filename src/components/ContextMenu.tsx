@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { IconCheck, IconChevronRight } from './Icons';
 
@@ -14,6 +8,8 @@ export type MenuItem =
       label: string;
       hint?: string;
       icon?: ReactNode;
+      /** CSS colour: renders a swatch dot at the end of the row. */
+      swatch?: string;
       danger?: boolean;
       disabled?: boolean;
       onSelect: () => void;
@@ -23,6 +19,8 @@ export type MenuItem =
       label: string;
       checked: boolean;
       hint?: string;
+      /** CSS colour: renders a swatch dot at the end of the row. */
+      swatch?: string;
       disabled?: boolean;
       onSelect: () => void;
     }
@@ -32,7 +30,14 @@ export type MenuItem =
   | { kind: 'separator' };
 
 const MENU_W = 232;
-const CLOSE_GRACE_MS = 160;
+/** Grace period so the pointer can travel from a row into its submenu. */
+const CLOSE_GRACE_MS = 140;
+/**
+ * Hover intent before an already-open submenu is replaced by another
+ * row's. Without it, a diagonal move from a row towards its own submenu
+ * clips the rows below and swaps the panel out from under the pointer.
+ */
+const SWITCH_DELAY_MS = 220;
 
 /**
  * A floating panel positioned in viewport coordinates and clamped on
@@ -85,74 +90,18 @@ function FloatingPanel({
   );
 }
 
-/** A submenu row plus its portalled child panel. */
-function SubmenuRow({
-  item,
-  onClose,
-  depth,
-}: {
-  item: Extract<MenuItem, { kind: 'submenu' }>;
-  onClose: () => void;
-  depth: number;
-}) {
-  const rowRef = useRef<HTMLButtonElement>(null);
-  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
-  const timer = useRef<number | null>(null);
-
-  const cancelClose = () => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-  };
-  // A grace period so the pointer can travel from the row to the panel.
-  const scheduleClose = () => {
-    cancelClose();
-    timer.current = window.setTimeout(() => setAnchor(null), CLOSE_GRACE_MS);
-  };
-  useEffect(() => cancelClose, []);
-
-  const open = () => {
-    cancelClose();
-    const r = rowRef.current?.getBoundingClientRect();
-    if (!r) return;
-    setAnchor({ left: r.right - 4, top: r.top - 5 });
-  };
-
-  return (
-    <>
-      <button
-        ref={rowRef}
-        className={`ctx-row ${item.disabled ? 'disabled' : ''} ${anchor ? 'open' : ''}`}
-        disabled={item.disabled}
-        role="menuitem"
-        aria-haspopup="true"
-        aria-expanded={!!anchor}
-        onMouseEnter={() => !item.disabled && open()}
-        onMouseLeave={scheduleClose}
-        onClick={() => !item.disabled && (anchor ? setAnchor(null) : open())}
-      >
-        {item.icon && <span className="ctx-icon">{item.icon}</span>}
-        <span className="ctx-label">{item.label}</span>
-        <IconChevronRight size={13} />
-      </button>
-      {anchor &&
-        !item.disabled &&
-        createPortal(
-          <FloatingPanel
-            left={anchor.left}
-            top={anchor.top}
-            onMouseEnter={cancelClose}
-            onMouseLeave={scheduleClose}
-          >
-            <Panel items={item.items} onClose={onClose} depth={depth + 1} />
-          </FloatingPanel>,
-          document.body,
-        )}
-    </>
-  );
+interface OpenSub {
+  index: number;
+  left: number;
+  top: number;
 }
 
+/**
+ * One menu panel. The open submenu is tracked here rather than by each
+ * row, so a single state means two siblings can never be open at once —
+ * dragging the pointer down a list of submenu rows replaces the open
+ * panel instead of stacking overlapping ones.
+ */
 function Panel({
   items,
   onClose,
@@ -162,6 +111,60 @@ function Panel({
   onClose: () => void;
   depth?: number;
 }) {
+  const [open, setOpen] = useState<OpenSub | null>(null);
+  const openRef = useRef<OpenSub | null>(null);
+  openRef.current = open;
+
+  /** One pending timer for both closing and switching submenus. */
+  const timer = useRef<number | null>(null);
+  const cancelPending = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  const after = (ms: number, fn: () => void) => {
+    cancelPending();
+    timer.current = window.setTimeout(fn, ms);
+  };
+  const scheduleClose = () => after(CLOSE_GRACE_MS, () => setOpen(null));
+  useEffect(() => cancelPending, []);
+
+  /** Hovering any non-submenu row retires the open submenu. */
+  const leaveToPlainRow = () => scheduleClose();
+
+  const geometry = (index: number, el: HTMLElement): OpenSub => {
+    const r = el.getBoundingClientRect();
+    return { index, left: r.right - 4, top: r.top - 5 };
+  };
+
+  const openAt = (index: number, el: HTMLElement | null) => {
+    if (!el) return;
+    cancelPending();
+    setOpen(geometry(index, el));
+  };
+
+  /**
+   * Open on hover, but only replace a *different* open submenu after a
+   * hover-intent delay: the pointer usually reaches a submenu by cutting
+   * across the rows beneath its own row, and swapping instantly would
+   * unmount the panel it is heading for. Only one submenu is ever open,
+   * so waiting cannot produce overlapping panels.
+   */
+  const hoverOpen = (index: number, el: HTMLElement) => {
+    const current = openRef.current;
+    if (current?.index === index) {
+      cancelPending();
+      return;
+    }
+    if (!current) {
+      openAt(index, el);
+      return;
+    }
+    const next = geometry(index, el);
+    after(SWITCH_DELAY_MS, () => setOpen(next));
+  };
+
   return (
     <div className="ctx-panel" style={{ minWidth: MENU_W }} role="menu">
       {items.map((it, i) => {
@@ -181,9 +184,32 @@ function Panel({
             </div>
           );
         }
+
         if (it.kind === 'submenu') {
-          return <SubmenuRow key={i} item={it} onClose={onClose} depth={depth} />;
+          const isOpen = open?.index === i;
+          return (
+            <button
+              key={i}
+              className={`ctx-row ${it.disabled ? 'disabled' : ''} ${isOpen ? 'open' : ''}`}
+              disabled={it.disabled}
+              role="menuitem"
+              aria-haspopup="true"
+              aria-expanded={isOpen}
+              onMouseEnter={(e) => !it.disabled && hoverOpen(i, e.currentTarget)}
+              onMouseLeave={scheduleClose}
+              onClick={(e) => {
+                if (it.disabled) return;
+                if (isOpen) setOpen(null);
+                else openAt(i, e.currentTarget);
+              }}
+            >
+              {it.icon && <span className="ctx-icon">{it.icon}</span>}
+              <span className="ctx-label">{it.label}</span>
+              <IconChevronRight size={13} />
+            </button>
+          );
         }
+
         const checked = it.kind === 'check' && it.checked;
         return (
           <button
@@ -193,6 +219,7 @@ function Panel({
             }`}
             disabled={it.disabled}
             role="menuitem"
+            onMouseEnter={leaveToPlainRow}
             onClick={() => {
               if (it.disabled) return;
               it.onSelect();
@@ -205,10 +232,28 @@ function Panel({
               it.icon && <span className="ctx-icon">{it.icon}</span>
             )}
             <span className="ctx-label">{it.label}</span>
+            {it.swatch && <span className="ctx-swatch" style={{ background: it.swatch }} />}
             {it.hint && <span className="ctx-hint">{it.hint}</span>}
           </button>
         );
       })}
+
+      {open &&
+        (() => {
+          const item = items[open.index];
+          if (!item || item.kind !== 'submenu') return null;
+          return createPortal(
+            <FloatingPanel
+              left={open.left}
+              top={open.top}
+              onMouseEnter={cancelPending}
+              onMouseLeave={scheduleClose}
+            >
+              <Panel items={item.items} onClose={onClose} depth={depth + 1} />
+            </FloatingPanel>,
+            document.body,
+          );
+        })()}
     </div>
   );
 }

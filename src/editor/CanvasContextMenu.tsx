@@ -8,12 +8,14 @@ import {
   IconMessage,
   IconPencil,
   IconPlus,
+  IconShapes,
   IconTable,
   IconTrash,
   IconType,
   IconUnlink,
 } from '../components/Icons';
 import { blockTarget, fieldShapeLabel, partitionByFit } from '../lib/fieldtypes';
+import { emptyRich, insertFieldAt } from '../lib/richtext';
 import {
   applyMark,
   plainText,
@@ -22,9 +24,17 @@ import {
   unlinkSpan,
   type TextRange,
 } from '../lib/richtext';
-import { collectUsages, locateSpan, valueAsRich } from '../lib/syncfields';
+import { collectUsages, locateSpan, resolveFieldInline, valueAsRich } from '../lib/syncfields';
 import { deleteField as deleteFieldRow, renameField } from '../store/fields';
-import type { Block, RichText, SyncDirection, SyncField, TextAlign, TextSize } from '../types';
+import type {
+  Block,
+  RichText,
+  ShapeKind,
+  SyncDirection,
+  SyncField,
+  TextAlign,
+  TextSize,
+} from '../types';
 import { useEditor } from './EditorProvider';
 import { useFieldOps } from './useFieldOps';
 import { useWorkspace } from './workspaceContext';
@@ -113,6 +123,28 @@ export function CanvasContextMenu({
 
   const setBody = (rich: RichText) => patch({ body: rich } as Partial<Block>);
 
+
+  /**
+   * With nothing selected there is no text to insert into, so create a
+   * text block that carries the field — the field is still a live embed.
+   */
+  const addFieldBlock = async (f: SyncField) => {
+    if (!page) return;
+    const children = resolveFieldInline(f.id, fieldMap) ?? [{ text: f.name }];
+    const wrapped = insertFieldAt(
+      emptyRich(),
+      { para: 0, start: 0, end: 0 },
+      f.id,
+      defaultDirection,
+      children,
+    );
+    dispatch({
+      type: 'ADD_BLOCK',
+      pageId: page.id,
+      blockType: 'text',
+      body: wrapped?.rich ?? emptyRich(),
+    });
+  };
 
   /* ---------- Field-span section ---------- */
 
@@ -254,7 +286,8 @@ export function CanvasContextMenu({
 
   const selectionItems = (): MenuItem[] => {
     const rich = getBodyRich();
-    if (readOnly || !rich || bodyLocked) return [];
+    // Shapes hold no content: no field actions apply.
+    if (readOnly || !rich || bodyLocked || block?.type === 'shape') return [];
     const range = target.range;
     const hasSel = !!range && range.start !== range.end;
     /** With no caret (block not being edited), append to the end. */
@@ -440,7 +473,7 @@ export function CanvasContextMenu({
         icon: <IconUnlink size={13} />,
         onSelect: () => patch({ binding: undefined }),
       });
-    } else if (!readOnly && (block.type === 'text' || block.type === 'table')) {
+    } else if (!readOnly && (block.type === 'text' || block.type === 'table' || block.type === 'image')) {
       // Unbound block: promote it to a field, or bind it to an existing
       // one of the matching shape.
       const bt = blockTarget(block)!;
@@ -562,6 +595,48 @@ export function CanvasContextMenu({
         label: 'Image',
         icon: <IconImage size={13} />,
         onSelect: () => dispatch({ type: 'ADD_BLOCK', pageId: page.id, blockType: 'image' }),
+      },
+      {
+        kind: 'submenu',
+        label: 'Shape',
+        icon: <IconShapes size={13} />,
+        items: (
+          [
+            ['rect', 'Rectangle'],
+            ['rounded', 'Rounded rectangle'],
+            ['circle', 'Ellipse'],
+            ['triangle', 'Triangle'],
+            ['line', 'Line'],
+            ['arrow', 'Arrow'],
+          ] as [ShapeKind, string][]
+        ).map(([shape, label]) => ({
+          kind: 'item' as const,
+          label,
+          onSelect: () =>
+            dispatch({ type: 'ADD_BLOCK', pageId: page.id, blockType: 'shape', shape }),
+        })),
+      },
+      { kind: 'separator' },
+      {
+        kind: 'submenu',
+        label: 'Insert sync field as a new block',
+        icon: <IconLink size={13} />,
+        disabled: fields.length === 0,
+        items: (() => {
+          const { fits, unfit } = partitionByFit(fields, 'inline');
+          return [
+            ...(fits.length
+              ? fieldItems(fits, (f) => void addFieldBlock(f))
+              : ([{ kind: 'note', label: 'No inline-compatible fields yet.' }] as MenuItem[])),
+            ...(unfit.length
+              ? ([
+                  { kind: 'separator' },
+                  { kind: 'note', label: 'Needs a matching block instead' },
+                ] as MenuItem[])
+              : []),
+            ...fieldItems(unfit.map((u) => u.field), () => {}, true),
+          ];
+        })(),
       },
       { kind: 'separator' },
       {

@@ -7,12 +7,20 @@ import { emptyRich, plainText, applyMark, rangeHasMark, type TextRange } from '.
 import { autoFieldName } from '../../lib/syncfields';
 import { useAuth } from '../../store/auth';
 import { createField } from '../../store/fields';
-import { uploadMedia } from '../../store/media';
+import { deleteMedia, uploadMedia } from '../../store/media';
+import {
+  COMPRESSION_LEVELS,
+  DEFAULT_COMPRESSION,
+  formatBytes,
+  type CompressionLevel,
+} from '../../lib/imagecompress';
 import { useSpaces } from '../../store/spaces';
 import type {
   Block,
   CellBinding,
   ImageBlock,
+  ShapeBlock,
+  ShapeKind,
   RichText,
   SyncDirection,
   TableBlock,
@@ -212,6 +220,7 @@ function SingleBlock({ block, pageId }: { block: Block; pageId: string }) {
       {block.type === 'text' && <TextProps block={block} update={update} />}
       {block.type === 'table' && <TableProps block={block} update={update} pageId={pageId} />}
       {block.type === 'image' && <ImageProps block={block} update={update} />}
+      {block.type === 'shape' && <ShapeProps block={block} update={update} />}
     </div>
   );
 }
@@ -655,24 +664,52 @@ function ImageProps({ block, update }: { block: ImageBlock; update: (p: Partial<
   const { currentSpace } = useSpaces();
   const dialog = useDialog();
   const [uploading, setUploading] = useState(false);
+  const [level, setLevel] = useState<CompressionLevel>(DEFAULT_COMPRESSION);
+  const [saved, setSaved] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const memoFit = useMemo(() => block.fit ?? 'cover', [block.fit]);
+  /** A bound block's image belongs to the field, not to this block. */
+  const ownsImage = !block.binding?.fieldId;
 
   const onFile = async (file: File) => {
     if (!currentSpace) return;
     setUploading(true);
+    setSaved(null);
     try {
-      const path = await uploadMedia(currentSpace.id, file);
-      update({ storagePath: path } as Partial<Block>);
+      const previous = block.storagePath;
+      const res = await uploadMedia(currentSpace.id, file, level);
+      update({ storagePath: res.storagePath } as Partial<Block>);
+      if (previous && ownsImage) await deleteMedia(previous);
+      const pct = Math.round((1 - res.bytes / Math.max(1, res.originalBytes)) * 100);
+      setSaved(
+        res.ext === 'webp'
+          ? `${formatBytes(res.originalBytes)} → ${formatBytes(res.bytes)} WebP${pct > 0 ? ` (${pct}% smaller)` : ''}`
+          : `stored as-is (${formatBytes(res.bytes)})`,
+      );
     } catch (e) {
       console.error(e);
       await dialog.alert('Upload failed', {
-        message: 'Check that the `media` storage bucket exists (see README setup).',
+        message: (e as Error).message || 'Check that the `media` storage bucket exists.',
       });
     } finally {
       setUploading(false);
     }
+  };
+
+  const removeImage = async () => {
+    const ok = await dialog.confirm('Remove this image?', {
+      message: ownsImage
+        ? 'The file is deleted from storage as well.'
+        : 'This block follows a field, so only the local copy is cleared.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    const previous = block.storagePath;
+    update({ storagePath: undefined } as Partial<Block>);
+    if (ownsImage) await deleteMedia(previous);
+    setSaved(null);
   };
 
   return (
@@ -691,9 +728,37 @@ function ImageProps({ block, update }: { block: ImageBlock; update: (p: Partial<
               e.target.value = '';
             }}
           />
-          <button className="btn" onClick={() => fileRef.current?.click()} disabled={uploading}>
-            {uploading ? 'Uploading…' : block.storagePath ? 'Replace image' : 'Upload image'}
-          </button>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button className="btn btn-sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
+              {uploading ? 'Compressing…' : block.storagePath ? 'Replace' : 'Upload image'}
+            </button>
+            {block.storagePath && (
+              <button className="btn btn-danger btn-sm" onClick={() => void removeImage()} disabled={uploading}>
+                <IconTrash size={12} /> Remove
+              </button>
+            )}
+          </div>
+          {saved && <span className="muted text-xs">{saved}</span>}
+        </div>
+      )}
+      {!readOnly && (
+        <div className="field">
+          <label htmlFor="img-cmp">Compression</label>
+          <select
+            id="img-cmp"
+            className="input"
+            value={level}
+            onChange={(e) => setLevel(e.target.value as CompressionLevel)}
+          >
+            {COMPRESSION_LEVELS.map((l) => (
+              <option key={l.key} value={l.key}>
+                {l.label} — {l.hint}
+              </option>
+            ))}
+          </select>
+          <span className="muted text-xs">
+            Applied on the next upload; images are stored as WebP unless you pick Original.
+          </span>
         </div>
       )}
       <div className="field">
@@ -729,6 +794,151 @@ function ImageProps({ block, update }: { block: ImageBlock; update: (p: Partial<
           onChange={(e) => update({ caption: e.target.value || undefined } as Partial<Block>)}
         />
       </div>
+    </>
+  );
+}
+
+/* ---------- Shape ---------- */
+
+const SHAPES: { kind: ShapeKind; label: string }[] = [
+  { kind: 'rect', label: 'Rectangle' },
+  { kind: 'rounded', label: 'Rounded' },
+  { kind: 'circle', label: 'Ellipse' },
+  { kind: 'triangle', label: 'Triangle' },
+  { kind: 'line', label: 'Line' },
+  { kind: 'arrow', label: 'Arrow' },
+];
+
+const SWATCHES = ['#e61e2a', '#000054', '#15803d', '#b45309', '#16181d', '#ffffff'];
+
+/**
+ * Shapes are decoration, so this panel is purely visual — there is no
+ * sync section, because a shape holds no content to share.
+ */
+function ShapeProps({
+  block,
+  update,
+}: {
+  block: ShapeBlock;
+  update: (p: Partial<Block>) => void;
+}) {
+  const { readOnly } = useEditor();
+
+  return (
+    <>
+      <div className="field">
+        <label htmlFor="sh-kind">Shape</label>
+        <select
+          id="sh-kind"
+          className="input"
+          disabled={readOnly}
+          value={block.shape}
+          onChange={(e) => update({ shape: e.target.value as ShapeKind } as Partial<Block>)}
+        >
+          {SHAPES.map((s) => (
+            <option key={s.kind} value={s.kind}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="field">
+        <label>Fill</label>
+        <div className="sh-swatches">
+          <button
+            className={`sh-swatch none ${!block.fill || block.fill === 'none' ? 'active' : ''}`}
+            title="No fill"
+            aria-label="No fill"
+            disabled={readOnly}
+            onClick={() => update({ fill: 'none' } as Partial<Block>)}
+          />
+          {SWATCHES.map((c) => (
+            <button
+              key={c}
+              className={`sh-swatch ${block.fill === c ? 'active' : ''}`}
+              style={{ background: c }}
+              title={c}
+              aria-label={`Fill ${c}`}
+              disabled={readOnly}
+              onClick={() => update({ fill: c } as Partial<Block>)}
+            />
+          ))}
+          <label className="sh-swatch custom" title="Custom fill">
+            <input
+              type="color"
+              disabled={readOnly}
+              onChange={(e) => update({ fill: e.target.value } as Partial<Block>)}
+              aria-label="Custom fill colour"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Outline</label>
+        <div className="sh-swatches">
+          <button
+            className={`sh-swatch none ${block.stroke === 'none' ? 'active' : ''}`}
+            title="No outline"
+            aria-label="No outline"
+            disabled={readOnly}
+            onClick={() => update({ stroke: 'none' } as Partial<Block>)}
+          />
+          {SWATCHES.map((c) => (
+            <button
+              key={c}
+              className={`sh-swatch ${block.stroke === c ? 'active' : ''}`}
+              style={{ background: c }}
+              title={c}
+              aria-label={`Outline ${c}`}
+              disabled={readOnly}
+              onClick={() => update({ stroke: c } as Partial<Block>)}
+            />
+          ))}
+          <label className="sh-swatch custom" title="Custom outline">
+            <input
+              type="color"
+              disabled={readOnly}
+              onChange={(e) => update({ stroke: e.target.value } as Partial<Block>)}
+              aria-label="Custom outline colour"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div className="field" style={{ flex: 1 }}>
+          <label htmlFor="sh-sw">Outline width</label>
+          <input
+            id="sh-sw"
+            className="input"
+            type="number"
+            min={0}
+            max={20}
+            disabled={readOnly}
+            value={block.strokeWidth ?? 2}
+            onChange={(e) => update({ strokeWidth: Number(e.target.value) } as Partial<Block>)}
+          />
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label htmlFor="sh-op">Opacity %</label>
+          <input
+            id="sh-op"
+            className="input"
+            type="number"
+            min={5}
+            max={100}
+            disabled={readOnly}
+            value={block.opacity ?? 100}
+            onChange={(e) => update({ opacity: Number(e.target.value) } as Partial<Block>)}
+          />
+        </div>
+      </div>
+
+      <p className="muted text-xs">
+        Shapes are decoration only — they are not synced between the master and its adaptations.
+      </p>
     </>
   );
 }

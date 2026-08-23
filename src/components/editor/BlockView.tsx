@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import { IconImage } from '../Icons';
 import { mediaUrl } from '../../lib/supabase';
-import type { Block, InlineNode, RichText } from '../../types';
+import type { Block, InlineNode, RichText, ShapeBlock } from '../../types';
 import { isFieldSpan } from '../../types';
 
 /* Render-only view of a block's content (canvas + previews). Field spans
@@ -112,6 +112,8 @@ export function BlockView({ block }: { block: Block }) {
     );
   }
 
+  if (block.type === 'shape') return <ShapeView block={block} />;
+
   // image
   return (
     <figure className="block-image" style={{ margin: 0 }}>
@@ -130,5 +132,53 @@ export function BlockView({ block }: { block: Block }) {
       )}
       {block.caption && <figcaption>{block.caption}</figcaption>}
     </figure>
+  );
+}
+
+/**
+ * Decorative shapes, drawn as SVG so they scale with the page surface at
+ * any zoom. `vectorEffect` keeps strokes a constant weight.
+ */
+function ShapeView({ block }: { block: ShapeBlock }) {
+  const fill = block.fill ?? 'var(--accent-wash)';
+  const stroke = block.stroke ?? 'var(--accent)';
+  const sw = block.strokeWidth ?? 2;
+  const common = {
+    fill,
+    stroke,
+    strokeWidth: sw,
+    vectorEffect: 'non-scaling-stroke' as const,
+  };
+
+  return (
+    <svg
+      className="block-shape"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      style={{ opacity: (block.opacity ?? 100) / 100 }}
+      aria-hidden="true"
+    >
+      {block.shape === 'rect' && <rect x="1" y="1" width="98" height="98" {...common} />}
+      {block.shape === 'rounded' && (
+        <rect x="1" y="1" width="98" height="98" rx="10" ry="10" {...common} />
+      )}
+      {block.shape === 'circle' && <ellipse cx="50" cy="50" rx="49" ry="49" {...common} />}
+      {block.shape === 'triangle' && <polygon points="50,2 98,98 2,98" {...common} />}
+      {block.shape === 'line' && (
+        <line x1="1" y1="50" x2="99" y2="50" {...common} fill="none" strokeLinecap="round" />
+      )}
+      {block.shape === 'arrow' && (
+        <>
+          <line x1="1" y1="50" x2="86" y2="50" {...common} fill="none" strokeLinecap="round" />
+          <polyline
+            points="70,26 96,50 70,74"
+            {...common}
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      )}
+    </svg>
   );
 }

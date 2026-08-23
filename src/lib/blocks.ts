@@ -1,4 +1,4 @@
-import type { Block, BlockType, GridConfig, GridPos, Page } from '../types';
+import type { Block, BlockType, GridConfig, GridPos, Page, RichText, ShapeKind } from '../types';
 import { effectiveColumns } from '../grid/presets';
 import { newId } from './ids';
 import { emptyRich, richFromText } from './richtext';
@@ -37,9 +37,15 @@ const DEFAULT_SIZES: Record<BlockType, { w: number; h: number }> = {
   text: { w: 6, h: 3 },
   table: { w: 8, h: 4 },
   image: { w: 5, h: 4 },
+  shape: { w: 3, h: 3 },
 };
 
-export function createBlock(type: BlockType, page: Page, grid: GridConfig): Block {
+export function createBlock(
+  type: BlockType,
+  page: Page,
+  grid: GridConfig,
+  opts: { shape?: ShapeKind; body?: RichText } = {},
+): Block {
   const cols = effectiveColumns(grid, page.kind);
   const rows = grid.rows;
   // Defaults are tuned for a 12-column page; cells are square, so the same
@@ -53,7 +59,24 @@ export function createBlock(type: BlockType, page: Page, grid: GridConfig): Bloc
 
   switch (type) {
     case 'text':
-      return { id, type, pos, body: richFromText('New text block'), size: 'md', align: 'left' };
+      return {
+        id,
+        type,
+        pos,
+        body: opts.body ?? richFromText('New text block'),
+        size: 'md',
+        align: 'left',
+      };
+    case 'shape':
+      return {
+        id,
+        type,
+        pos,
+        shape: opts.shape ?? 'rect',
+        fill: 'var(--accent-wash)',
+        stroke: 'var(--accent)',
+        strokeWidth: 2,
+      };
     case 'table':
       return {
         id,

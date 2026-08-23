@@ -5,23 +5,28 @@ import App from './App';
 import { DialogProvider } from './components/Dialog';
 import { ThemeProvider } from './lib/theme';
 import { AuthProvider } from './store/auth';
+import { SettingsProvider } from './store/settings';
 import { SpacesProvider } from './store/spaces';
 import './styles/tokens.css';
 import './styles/base.css';
 import './styles/shell.css';
 
+// Auth sits above Settings (settings are per account), and Settings above
+// Theme (the theme is one of those settings).
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ThemeProvider>
-      <DialogProvider>
-        <AuthProvider>
-          <SpacesProvider>
-            <BrowserRouter>
-              <App />
-            </BrowserRouter>
-          </SpacesProvider>
-        </AuthProvider>
-      </DialogProvider>
-    </ThemeProvider>
+    <AuthProvider>
+      <SettingsProvider>
+        <ThemeProvider>
+          <DialogProvider>
+            <SpacesProvider>
+              <BrowserRouter>
+                <App />
+              </BrowserRouter>
+            </SpacesProvider>
+          </DialogProvider>
+        </ThemeProvider>
+      </SettingsProvider>
+    </AuthProvider>
   </React.StrictMode>,
 );

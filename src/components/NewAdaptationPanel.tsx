@@ -6,20 +6,21 @@ import { IconX } from './Icons';
 
 /** Name + target format (prefilled from the master, changeable). */
 export function NewAdaptationPanel({
-  master,
+  parent,
   onCreate,
   onClose,
   busy,
 }: {
-  master: DispatchDocument;
+  /** Document the new adaptation derives from: the master or another adaptation. */
+  parent: DispatchDocument;
   onCreate: (args: { title: string; grid: GridConfig }) => void;
   onClose: () => void;
   busy?: boolean;
 }) {
   const [title, setTitle] = useState('');
-  const [pageSize, setPageSize] = useState<PageSize>(master.grid.pageSize);
-  const [orientation, setOrientation] = useState<Orientation>(master.grid.orientation);
-  const [columns, setColumns] = useState(master.grid.columns);
+  const [pageSize, setPageSize] = useState<PageSize>(parent.grid.pageSize);
+  const [orientation, setOrientation] = useState<Orientation>(parent.grid.orientation);
+  const [columns, setColumns] = useState(parent.grid.columns);
 
   const grid: GridConfig = useMemo(
     () =>
@@ -27,11 +28,11 @@ export function NewAdaptationPanel({
         pageSize,
         orientation,
         columns,
-        marginMm: master.grid.marginMm,
-        gutterMm: master.grid.gutterMm,
-        spineMm: master.grid.spineMm,
+        marginMm: parent.grid.marginMm,
+        gutterMm: parent.grid.gutterMm,
+        spineMm: parent.grid.spineMm,
       }),
-    [master.grid, pageSize, orientation, columns],
+    [parent.grid, pageSize, orientation, columns],
   );
 
   return (
@@ -44,8 +45,8 @@ export function NewAdaptationPanel({
           </button>
         </div>
         <p className="muted text-xs" style={{ marginBottom: 16 }}>
-          Clones the master — every block starts synced (↓ down) and follows the master live.
-          Unlink, narrow or re-direct embeds afterwards.
+          Clones <strong>{parent.title}</strong> — every block starts synced (↓ down) and follows
+          it live. Unlink, narrow or re-direct embeds afterwards.
         </p>
 
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>

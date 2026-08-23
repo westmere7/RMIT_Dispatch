@@ -17,7 +17,8 @@ body,
 body {
   margin: 0;
   font-family: var(--font);
-  font-size: var(--fs-md);
+  /* --ui-scale comes from the account's interface-scale setting. */
+  font-size: calc(var(--fs-md) * var(--ui-scale, 1));
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
@@ -72,6 +73,14 @@ button {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* The same, when the account asks for it explicitly. */
+[data-reduce-motion='true'] *,
+[data-reduce-motion='true'] *::before,
+[data-reduce-motion='true'] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
 }
 
 /* ---------- Buttons ---------- */
@@ -223,6 +232,20 @@ button {
 }
 
 /* ---------- Inputs ---------- */
+/* Native checkboxes, radios and sliders draw themselves in the OS accent
+   colour, which reads as someone else's blue in an RMIT app. `.switch`
+   overrides the sizing for the settings toggles. */
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--primary);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+input[type='range'] {
+  accent-color: var(--primary);
+}
+
 .input {
   height: 34px;
   padding: 0 var(--space-3);
@@ -490,6 +513,14 @@ select.input {
   color: var(--text-muted);
   flex-shrink: 0;
 }
+/* Colour swatch on a menu row (project flags). */
+.ctx-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
 .ctx-sep {
   height: 1px;
   border: none;
@@ -681,6 +712,38 @@ select.input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.fp-name-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fp-name-btn:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+/* Peek popup */
+.fp-peek-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.fp-peek-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
 .fp-shape {
   font-size: 9px;
   color: var(--text-muted);
@@ -810,14 +873,27 @@ select.input {
 
 /* One shared grid for the header and every row. Indentation lives inside
    the first cell, so nested rows keep their columns aligned. */
+/* The table stops widening once the columns have what their content
+   needs — stretching five short columns across an ultra-wide window
+   just opens a void between the value and the right-hand meta. */
+.gf-table {
+  padding: 0;
+  overflow: hidden;
+  /* Roughly the lineage page's measure, so the two full-width pages
+     agree on how wide a block of content should get. */
+  max-width: 1320px;
+}
 .gf-grid {
   display: grid;
   grid-template-columns:
-    minmax(170px, 1.25fr)
-    64px
-    minmax(190px, 2fr)
-    108px
-    88px;
+    minmax(180px, 1.1fr)
+    /* Wide enough for the longest label, COMBINATION, which used to
+       overflow into the value column. */
+    112px
+    minmax(220px, 1.5fr)
+    minmax(110px, 0.8fr)
+    104px
+    86px;
   align-items: stretch;
 }
 .gf-head,
@@ -834,11 +910,12 @@ select.input {
   .gf-frow,
   .gf-drow {
     grid-template-columns:
-      minmax(170px, 1.25fr)
-      64px
-      minmax(190px, 2fr)
-      108px
-      88px;
+      minmax(180px, 1.1fr)
+      112px
+      minmax(220px, 1.5fr)
+      minmax(110px, 0.8fr)
+      104px
+      86px;
   }
 }
 
@@ -939,6 +1016,16 @@ select.input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.gf-when {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.gf-head .gf-when {
+  text-align: right;
+}
 .gf-col-actions {
   display: flex;
   align-items: center;
@@ -1006,6 +1093,823 @@ select.input {
   color: var(--text-muted);
 }
 
+/* Long values collapse to a chip that opens the full value. */
+.fv-more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.fv-more-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.fv-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fv-view {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.fv-full {
+  max-height: 52vh;
+  overflow: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.fv-full p {
+  margin: 0 0 0.5em;
+}
+.fv-full p:last-child {
+  margin-bottom: 0;
+}
+.fv-full .fv-table th,
+.fv-full .fv-table td {
+  font-size: var(--fs-xs);
+  padding: 3px 8px;
+  max-width: 220px;
+}
+
+/* ============================================================
+   Master → adaptation lineage tree
+   ============================================================ */
+
+.lineage {
+  display: flex;
+  flex-direction: column;
+}
+
+.lin-item {
+  position: relative;
+  padding-bottom: 10px;
+}
+
+/* Connector rails. Each level gets a 30px column; the rail sits at its
+   centre so elbows meet the parent card's left edge cleanly. */
+.lin-rail {
+  position: absolute;
+  /* Reach up through the previous row's gap so the line is unbroken. */
+  top: -10px;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--border-strong);
+  pointer-events: none;
+}
+.lin-rail.continues {
+  bottom: -10px;
+}
+/* Elbow: down from the parent card's bottom edge, then right to meet the
+   child card near its title line. */
+.lin-elbow {
+  position: absolute;
+  top: -10px;
+  height: 38px;
+  width: 15px;
+  border-left: 1.5px solid var(--border-strong);
+  border-bottom: 1.5px solid var(--border-strong);
+  border-bottom-left-radius: 9px;
+  pointer-events: none;
+}
+/* A node dot where the elbow meets the card makes the parentage read at
+   a glance rather than being inferred from indentation. */
+.lin-elbow::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: -3.5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Cards indent by depth; the connector column stays clear. */
+.lin-card {
+  margin-left: calc(var(--lin-depth, 0) * 30px);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  /* Same padding and height for every row, master included. */
+  min-height: 84px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.lin-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--success);
+}
+.lin-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+.lin-card:focus-visible {
+  box-shadow: var(--ring);
+}
+
+/* The master reads as the root: taller, navy spine, subtle wash. */
+.lin-card.is-master {
+  border-color: var(--border-strong);
+  background: linear-gradient(90deg, var(--accent-wash) 0%, var(--surface) 46%);
+  box-shadow: var(--shadow);
+}
+.lin-card.is-master::before {
+  width: 4px;
+  background: var(--accent);
+}
+.lin-card.is-locked::before {
+  background: var(--primary);
+}
+
+.lin-thumb {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 54px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.lin-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lin-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.lin-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lin-card.is-master .lin-title {
+  font-weight: 700;
+}
+.lin-meta,
+.lin-lineage {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lin-lineage strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+.lin-lineage.detached {
+  color: var(--warning);
+}
+
+/* Fixed-width right side so stats and actions line up across every row,
+   whatever each card is carrying. */
+.lin-stats {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  width: 190px;
+}
+
+.lin-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  width: 158px;
+}
+.lin-actions .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+.lin-actions .icon-btn:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+.lin-actions-spacer {
+  display: block;
+}
+
+/* Comment count doubles as the button that opens the thread. */
+.lin-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  margin-right: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.lin-act:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.lin-act.has-open {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-wash);
+}
+
+/* Ghost affordance for adding a child at this level. */
+.lin-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  opacity: 0.7;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.lin-add:hover {
+  opacity: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+  border-style: solid;
+}
+
+/* ---------- Field kind picker (new field) ---------- */
+.nf-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
+.nf-kind {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.nf-kind:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.nf-kind.active {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.nf-kind svg {
+  color: var(--text-muted);
+}
+.nf-kind.active svg {
+  color: var(--accent);
+}
+.nf-kind-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.nf-kind-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+/* ---------- Combination field parts ---------- */
+.grp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow: auto;
+  padding-right: 2px;
+}
+.grp-part {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.grp-part-head {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.grp-part-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---------- Image previews ---------- */
+.fv-image {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fv-image img {
+  max-width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.fv-image figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: var(--fs-xs);
+}
+
+/* Combination preview inside the peek popup */
+.fv-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fv-part {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+}
+.fv-part-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+
+/* ---------- Shape blocks ---------- */
+.block-shape {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+.sh-swatches {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.sh-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  padding: 0;
+  cursor: pointer;
+  position: relative;
+}
+.sh-swatch.active {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.sh-swatch.none {
+  background:
+    linear-gradient(45deg, transparent 46%, var(--danger) 46%, var(--danger) 54%, transparent 54%),
+    var(--surface);
+}
+.sh-swatch.custom {
+  background:
+    conic-gradient(var(--rmit-red), var(--warning), var(--success), var(--accent), var(--rmit-red));
+  overflow: hidden;
+}
+.sh-swatch.custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* ---------- Settings page ---------- */
+/* ============================================================
+   Settings — desktop two-pane layout
+   ============================================================ */
+
+.settings-page {
+  padding: var(--space-5);
+  /* Fills the window: this is a desktop app, not a phone column. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 100%;
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.settings-defaults {
+  text-align: right;
+  max-width: 340px;
+}
+
+.settings-shell {
+  display: grid;
+  /* Section rail, then a pane that takes everything that is left. */
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  flex: 1;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+}
+.settings-nav-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.settings-nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.settings-nav-item.active {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+.settings-nav-icon {
+  display: flex;
+  margin-top: 1px;
+}
+.settings-nav-item.active .settings-nav-icon {
+  color: var(--primary);
+}
+.settings-nav-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.settings-nav-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.settings-nav-blurb {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.settings-pane {
+  padding: var(--space-5) var(--space-6);
+  animation: set-pane-in var(--dur) var(--ease);
+}
+@keyframes set-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+.settings-pane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.set-group + .set-group {
+  margin-top: var(--space-5);
+}
+.set-group-title {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+/* One grid for the whole group: name, explanation, control. Sharing the
+   track definition is what keeps every control on the same edge, however
+   long the labels are. */
+.set-rows {
+  display: grid;
+  /* The name column is capped so the explanation gets the slack as the
+     window widens; the control column is fixed enough that steppers and
+     selects share one right edge. */
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr) minmax(180px, 260px);
+  align-items: center;
+  column-gap: var(--space-5);
+}
+.set-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+}
+.set-rows > .set-row:first-child {
+  border-top: none;
+  padding-top: 2px;
+}
+.set-name {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.set-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.set-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.set-select {
+  width: 100%;
+}
+/* A control plus its own caption, still right-aligned in the row. */
+.set-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+}
+.set-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  line-height: 1.4;
+}
+.set-presets {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Narrow windows: drop to two columns, the hint under the name. */
+@media (max-width: 1180px) {
+  .settings-shell {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+  .set-rows {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  }
+  .set-row {
+    align-items: start;
+  }
+  .set-name {
+    grid-column: 1;
+  }
+  .set-hint {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .set-control {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+/* ---------- Slider ---------- */
+.set-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.set-slider input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--primary);
+}
+.set-slider-value {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  width: 42px;
+  text-align: right;
+}
+
+/* ---------- Switch ---------- */
+.switch {
+  display: inline-flex;
+  cursor: pointer;
+}
+.switch input {
+  /* Kept in the DOM for focus and assistive tech, just not painted. */
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch-track {
+  width: 38px;
+  height: 22px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.switch-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform var(--dur) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.switch.on .switch-track {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.switch.on .switch-knob {
+  background: #fff;
+  transform: translateX(16px);
+}
+.switch input:focus-visible + .switch-track {
+  box-shadow: var(--ring);
+}
+.switch.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------- Number stepper ---------- */
+.stepper {
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.stepper-btn {
+  width: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.stepper-btn:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+.stepper-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.stepper-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.stepper-value input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  padding: 0 2px;
+}
+.stepper-value input:focus {
+  outline: none;
+}
+/* The OS spinner is replaced by the buttons either side. */
+.stepper-value input::-webkit-outer-spin-button,
+.stepper-value input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.stepper-value input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.stepper-value em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-right: 6px;
+}
+
 /* Tooltip (pure CSS, for icon rail) */
 [data-tip] {
   position: relative;
@@ -1033,4 +1937,201 @@ select.input {
 [data-tip]:hover::after {
   opacity: 1;
   transform: translateY(-50%) scale(1);
+}
+
+/* ============================================================
+   Projects board — folders, uniform cards, colour flags
+   ============================================================ */
+
+.pj-board {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* ---- Folder group ---- */
+.pj-folder {
+  border-radius: var(--radius);
+  /* A transparent inset ring so the drop state does not shift layout. */
+  box-shadow: inset 0 0 0 2px transparent;
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+.pj-folder.dropping {
+  box-shadow: inset 0 0 0 2px var(--primary);
+  background: var(--primary-wash);
+}
+.pj-folder-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  margin-bottom: var(--space-3);
+}
+.pj-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text);
+}
+.pj-folder-toggle:hover {
+  background: var(--surface-2);
+}
+.pj-folder-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.pj-drop-hint {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--primary);
+}
+
+/* ---- Card grid: fixed track width, so every card matches ---- */
+.pj-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.pj-card {
+  /* One fixed shape for every card: thumbnail frame + text block.
+     Uniform height is what makes the board read as a grid. */
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.pj-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+.pj-card:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.pj-card.dragging {
+  opacity: 0.45;
+}
+/* The flag paints a strip along the top edge. */
+.pj-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: var(--pj-flag, transparent);
+  z-index: 1;
+}
+
+.pj-thumb {
+  /* Fixed frame — the preview is centred inside it whatever its aspect. */
+  height: 104px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.pj-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3);
+  /* Equal text height regardless of how many pills a card carries. */
+  min-height: 92px;
+}
+.pj-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pj-flag-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pj-flag, var(--border-strong));
+  flex: 0 0 auto;
+}
+.pj-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pj-meta {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pj-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: auto;
+}
+/* ---- Flag filter chips ---- */
+.pj-flag-filter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.pj-flag-chip {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--pj-flag, var(--border-strong));
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.pj-flag-chip:hover {
+  transform: scale(1.18);
+}
+.pj-flag-chip.active {
+  border-color: var(--text);
+}
+.pj-flag-chip.all {
+  width: auto;
+  height: auto;
+  border-radius: 999px;
+  background: none;
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.pj-flag-chip.all.active {
+  background: var(--surface-2);
+  border-color: transparent;
+  color: var(--text);
 }

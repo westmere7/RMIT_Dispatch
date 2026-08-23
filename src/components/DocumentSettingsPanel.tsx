@@ -1,43 +1,50 @@
 import { useMemo, useState } from 'react';
 import {
-  DEFAULT_GRID,
   GRID_PRESETS,
   MAX_COLUMNS,
-  MIN_COLUMNS,
   PAGE_SIZES,
   cellSizeMm,
   deriveRows,
   makeGrid,
 } from '../grid/presets';
-import type { GridConfig, Orientation, PageSize } from '../types';
+import type { DispatchDocument, GridConfig, Orientation, PageSize } from '../types';
 import { GridPreview } from './GridPreview';
 import { IconX } from './Icons';
 
-export interface ProjectPanelValues {
+export interface DocumentSettingsValues {
   title: string;
-  type: string;
+  /** Project type — only offered for the master. */
+  type?: string;
   grid: GridConfig;
 }
 
 /**
- * Create a project: its title, type and the master document's starting
- * format. Once created, each document carries its own settings — see
- * DocumentSettingsPanel.
+ * Settings for ONE document. Every document in a project — the master and
+ * each adaptation — carries its own page format and grid, because a flyer
+ * is not an A4 guide. The grid may only be refined: coarsening would
+ * throw away layout precision this document's blocks already rely on.
  */
-export function ProjectPanel({
+export function DocumentSettingsPanel({
+  doc,
+  isMaster,
+  projectType,
   onSubmit,
   onClose,
   busy,
 }: {
-  onSubmit: (values: ProjectPanelValues) => void;
+  doc: DispatchDocument;
+  isMaster: boolean;
+  projectType?: string;
+  onSubmit: (values: DocumentSettingsValues) => void;
   onClose: () => void;
   busy?: boolean;
 }) {
-  const base = DEFAULT_GRID;
-  const minColumns = MIN_COLUMNS;
+  const base = doc.grid;
+  /** This document's current granularity is the floor. */
+  const minColumns = base.columns;
 
-  const [title, setTitle] = useState('');
-  const [type, setType] = useState('Campaign');
+  const [title, setTitle] = useState(doc.title);
+  const [type, setType] = useState(projectType ?? '');
   const [pageSize, setPageSize] = useState<PageSize>(base.pageSize);
   const [orientation, setOrientation] = useState<Orientation>(base.orientation);
   const [columns, setColumns] = useState(base.columns);
@@ -51,48 +58,58 @@ export function ProjectPanel({
   );
 
   const presetRows = (cols: number) => deriveRows({ pageSize, orientation }, cols);
+  const gridChanged = grid.columns !== base.columns || grid.rows !== base.rows;
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 720 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <h2>New project</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span className={`pill ${isMaster ? 'pill-accent' : ''}`}>
+            {isMaster ? 'master' : 'adaptation'}
+          </span>
+          <h2 style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {doc.title} · settings
+          </h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             <IconX />
           </button>
         </div>
         <p className="muted text-xs" style={{ marginBottom: 16 }}>
-          Grid cells are always square — the row count follows from the columns and the page
-          proportions. Each document gets its own settings afterwards.
+          These settings apply to this document only. Grid cells are always square — the row count
+          follows from the columns and the page proportions — and the grid can only be refined,
+          never coarsened.
         </p>
 
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div className="field">
-              <label htmlFor="pp-title">Title</label>
+              <label htmlFor="ds-title">{isMaster ? 'Title (project and master)' : 'Title'}</label>
               <input
-                id="pp-title"
+                id="ds-title"
                 className="input"
                 autoFocus
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Postgraduate Guide 2026"
               />
             </div>
+
+            {isMaster && (
+              <div className="field">
+                <label htmlFor="ds-type">Project type</label>
+                <input
+                  id="ds-type"
+                  className="input"
+                  value={type}
+                  onChange={(e) => setType(e.target.value)}
+                  placeholder="Campaign, Guide, Brochure…"
+                />
+              </div>
+            )}
+
             <div className="field">
-              <label htmlFor="pp-type">Type</label>
-              <input
-                id="pp-type"
-                className="input"
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                placeholder="Campaign, Guide, Brochure…"
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="pp-size">Page size</label>
+              <label htmlFor="ds-size">Page size</label>
               <select
-                id="pp-size"
+                id="ds-size"
                 className="input"
                 value={pageSize}
                 onChange={(e) => setPageSize(e.target.value as PageSize)}
@@ -104,6 +121,7 @@ export function ProjectPanel({
                 ))}
               </select>
             </div>
+
             <div className="field">
               <label>Orientation</label>
               <div className="segmented">
@@ -133,7 +151,7 @@ export function ProjectPanel({
                       className={columns === p.columns ? 'active' : ''}
                       title={
                         disabled
-                          ? 'Coarser grids are not available once a project exists'
+                          ? 'Coarser grids are not available for an existing document'
                           : p.recommended
                             ? 'Recommended'
                             : undefined
@@ -149,12 +167,12 @@ export function ProjectPanel({
             </div>
 
             <div className="field">
-              <label htmlFor="pp-cols">
+              <label htmlFor="ds-cols">
                 Custom columns ({minColumns}–{MAX_COLUMNS})
               </label>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <input
-                  id="pp-cols"
+                  id="ds-cols"
                   className="input"
                   style={{ width: 90 }}
                   type="number"
@@ -163,7 +181,10 @@ export function ProjectPanel({
                   value={columns}
                   onChange={(e) =>
                     setColumns(
-                      Math.max(minColumns, Math.min(MAX_COLUMNS, Number(e.target.value) || minColumns)),
+                      Math.max(
+                        minColumns,
+                        Math.min(MAX_COLUMNS, Number(e.target.value) || minColumns),
+                      ),
                     )
                   }
                 />
@@ -216,7 +237,15 @@ export function ProjectPanel({
               Single page
             </span>
             <GridPreview grid={grid} kind="single" width={140} />
-
+            {gridChanged && (
+              <p
+                className="pill pill-warning"
+                style={{ height: 'auto', padding: '6px 10px', whiteSpace: 'normal' }}
+              >
+                Refining {base.columns}×{base.rows} → {grid.columns}×{grid.rows}. This document&apos;s
+                blocks are rescaled to keep their positions.
+              </p>
+            )}
           </div>
         </div>
 
@@ -227,9 +256,15 @@ export function ProjectPanel({
           <button
             className="btn btn-primary"
             disabled={!title.trim() || busy}
-            onClick={() => onSubmit({ title: title.trim(), type: type.trim(), grid })}
+            onClick={() =>
+              onSubmit({
+                title: title.trim(),
+                ...(isMaster ? { type: type.trim() } : {}),
+                grid,
+              })
+            }
           >
-            {busy ? 'Creating…' : 'Create project'}
+            {busy ? 'Saving…' : 'Save settings'}
           </button>
         </div>
       </div>

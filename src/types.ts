@@ -129,7 +129,23 @@ export interface ImageBlock extends BlockBase {
   caption?: string;
 }
 
-export type Block = TextBlock | TableBlock | ImageBlock;
+export type ShapeKind = 'rect' | 'rounded' | 'circle' | 'triangle' | 'line' | 'arrow';
+
+/**
+ * Decoration only. Shapes carry no content, so they are never synced —
+ * nothing about them belongs to a sync field.
+ */
+export interface ShapeBlock extends BlockBase {
+  type: 'shape';
+  shape: ShapeKind;
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  /** 0–100, applied to the whole shape. */
+  opacity?: number;
+}
+
+export type Block = TextBlock | TableBlock | ImageBlock | ShapeBlock;
 export type BlockType = Block['type'];
 
 export type PageKind = 'single' | 'spread';
@@ -143,11 +159,17 @@ export interface Page {
 
 /* ---------- Projects / documents / versions ---------- */
 
+/** Colour flags for at-a-glance status on the projects board. */
+export type ProjectFlag = 'red' | 'amber' | 'green' | 'blue' | 'purple' | 'grey';
+
 export interface Project {
   id: string;
   spaceId: string;
   title: string;
   type: string;
+  /** '/'-separated organisation path; '' is the root. */
+  folder: string;
+  flag: ProjectFlag | null;
   createdBy: string;
   createdAt: string;
 }
@@ -194,11 +216,37 @@ export interface Version {
 
 /* ---------- Sync fields ---------- */
 
+/** What a field holds. Chosen when the field is created. */
+export type FieldKind = 'scalar' | 'richtext' | 'table' | 'image' | 'group';
+
+export interface ImagePayload {
+  storagePath?: string;
+  alt?: string;
+  caption?: string;
+  fit?: 'cover' | 'contain';
+  /** Recorded at upload time so the UI can report what was saved. */
+  width?: number;
+  height?: number;
+  bytes?: number;
+}
+
+/** One member of a combination field, in display order. */
+export type FieldPart =
+  | { id: string; kind: 'text'; rich: RichText }
+  | { id: string; kind: 'table'; headerRow: boolean; rows: RichText[][] }
+  | ({ id: string; kind: 'image' } & ImagePayload);
+
 export type FieldValue =
-  | { kind: 'richtext'; rich: RichText }
+  /** A word, number or short phrase — no formatting, no line breaks. */
   | { kind: 'scalar'; text: string }
+  /** Flowing copy: one or more paragraphs. */
+  | { kind: 'richtext'; rich: RichText }
   /** A whole table owned by the field: header flag plus every cell. */
-  | { kind: 'table'; headerRow: boolean; rows: RichText[][] };
+  | { kind: 'table'; headerRow: boolean; rows: RichText[][] }
+  /** A single image in the media bucket. */
+  | ({ kind: 'image' } & ImagePayload)
+  /** A combination: an ordered mix of text, tables and images. */
+  | { kind: 'group'; parts: FieldPart[] };
 
 /** Where a field lives: one project, or every project in the space. */
 export type FieldScope = 'local' | 'global';

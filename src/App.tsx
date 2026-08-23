@@ -7,6 +7,7 @@ import { NotConfigured } from './pages/NotConfigured';
 import { NotFound } from './pages/NotFound';
 import { Projects } from './pages/Projects';
 import { ProjectView } from './pages/ProjectView';
+import { Settings } from './pages/Settings';
 import { SpaceSettings } from './pages/SpaceSettings';
 import { Workspace } from './pages/Workspace';
 import { useAuth } from './store/auth';
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/docs/:documentId" element={<Workspace />} />
         <Route path="/fields" element={<GlobalFields />} />
         <Route path="/space" element={<SpaceSettings />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<NotFound />} />
       </Route>

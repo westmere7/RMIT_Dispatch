@@ -8,6 +8,8 @@ export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
 interface GestureData {
   mode: 'move' | 'resize';
+  /** Groups every update of this gesture into one undo step. */
+  key: string;
   pageId: string;
   startX: number;
   startY: number;
@@ -32,6 +34,8 @@ export function useDragResize(surfaceRef: RefObject<HTMLElement>) {
 
   const stateRef = useRef(state);
   stateRef.current = state;
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
   const pageRef = useRef(currentPage);
   pageRef.current = currentPage;
 
@@ -64,7 +68,7 @@ export function useDragResize(surfaceRef: RefObject<HTMLElement>) {
           id,
           pos: clampPos({ ...pos, col: pos.col + dCol, row: pos.row + dRow }, cs.cols, cs.rows),
         }));
-        dispatch({ type: 'SET_POSITIONS', pageId: g.pageId, positions });
+        dispatch({ type: 'SET_POSITIONS', pageId: g.pageId, positions, coalesce: g.key });
       } else {
         const { id, pos } = g.starts[0];
         let { col, row, w, h } = pos;
@@ -99,6 +103,7 @@ export function useDragResize(surfaceRef: RefObject<HTMLElement>) {
           type: 'SET_POSITIONS',
           pageId: g.pageId,
           positions: [{ id, pos: clampPos({ col, row, w, h }, cs.cols, cs.rows) }],
+          coalesce: g.key,
         });
       }
     },
@@ -106,6 +111,8 @@ export function useDragResize(surfaceRef: RefObject<HTMLElement>) {
   );
 
   const endGesture = useCallback((e: PointerEvent) => {
+    // The gesture is committed here — one drag or resize is one undo step.
+    if (gesture.current) dispatchRef.current({ type: 'END_COALESCE' });
     const target = e.target as HTMLElement;
     try {
       target.releasePointerCapture(e.pointerId);
@@ -148,6 +155,7 @@ export function useDragResize(surfaceRef: RefObject<HTMLElement>) {
       target.setPointerCapture(e.pointerId);
       gesture.current = {
         mode: 'move',
+        key: `move:${e.pointerId}:${Date.now()}`,
         pageId: page.id,
         startX: e.clientX,
         startY: e.clientY,
@@ -176,6 +184,7 @@ export function useDragResize(surfaceRef: RefObject<HTMLElement>) {
       target.setPointerCapture(e.pointerId);
       gesture.current = {
         mode: 'resize',
+        key: `resize:${e.pointerId}:${Date.now()}`,
         pageId: page.id,
         startX: e.clientX,
         startY: e.clientY,

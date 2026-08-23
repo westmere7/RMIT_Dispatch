@@ -63,7 +63,7 @@ export function SpaceSettings() {
   };
 
   return (
-    <div className="content-pad" style={{ maxWidth: 720 }}>
+    <div className="content-pad" style={{ maxWidth: 1100 }}>
       <div className="card" style={{ padding: 'var(--space-5)', marginBottom: 'var(--space-4)' }}>
         <h2 style={{ marginBottom: 12 }}>Space</h2>
         <div style={{ display: 'flex', gap: 8, maxWidth: 420 }}>

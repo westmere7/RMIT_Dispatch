@@ -14,14 +14,18 @@ export type FieldTarget =
   | 'textBlock'
   /** A whole table block. */
   | 'tableBlock'
+  /** A whole image block. */
+  | 'imageBlock'
   /** One table cell. */
   | 'tableCell';
 
-export type FieldShape = 'value' | 'text' | 'rich-multi' | 'table';
+export type FieldShape = 'value' | 'text' | 'rich-multi' | 'table' | 'image' | 'group';
 
 export function fieldShape(value: FieldValue): FieldShape {
   if (value.kind === 'scalar') return 'value';
   if (value.kind === 'table') return 'table';
+  if (value.kind === 'image') return 'image';
+  if (value.kind === 'group') return 'group';
   return value.rich.length > 1 ? 'rich-multi' : 'text';
 }
 
@@ -30,6 +34,8 @@ const SHAPE_LABEL: Record<FieldShape, string> = {
   text: 'text',
   'rich-multi': 'multi-paragraph',
   table: 'table',
+  image: 'image',
+  group: 'combination',
 };
 
 export function fieldShapeLabel(value: FieldValue): string {
@@ -57,6 +63,16 @@ export function fieldFits(value: FieldValue, target: FieldTarget): Compatibility
           reason: 'A table field can only fill a whole table block.',
         };
       }
+      if (shape === 'image') {
+        return { ok: false, reason: 'An image field can only fill an image block.' };
+      }
+      if (shape === 'group') {
+        return {
+          ok: false,
+          reason:
+            'A combination field holds several pieces at once, so it cannot sit inside a line. Bind its parts individually.',
+        };
+      }
       if (shape === 'rich-multi') {
         return {
           ok: false,
@@ -67,10 +83,10 @@ export function fieldFits(value: FieldValue, target: FieldTarget): Compatibility
       return OK;
     }
     case 'textBlock': {
-      if (shape === 'table') {
+      if (shape === 'table' || shape === 'image' || shape === 'group') {
         return {
           ok: false,
-          reason: 'A table field can only fill a whole table block.',
+          reason: `A ${SHAPE_LABEL[shape]} field cannot fill a text block.`,
         };
       }
       return OK;
@@ -84,6 +100,15 @@ export function fieldFits(value: FieldValue, target: FieldTarget): Compatibility
       }
       return OK;
     }
+    case 'imageBlock': {
+      if (shape !== 'image') {
+        return {
+          ok: false,
+          reason: `Only an image field can fill an image block — this one holds ${SHAPE_LABEL[shape]}.`,
+        };
+      }
+      return OK;
+    }
   }
 }
 
@@ -91,7 +116,9 @@ export function fieldFits(value: FieldValue, target: FieldTarget): Compatibility
 export function blockTarget(block: Block): FieldTarget | null {
   if (block.type === 'text') return 'textBlock';
   if (block.type === 'table') return 'tableBlock';
-  return null; // images hold media, not field values
+  if (block.type === 'image') return 'imageBlock';
+  // Shapes are decoration: they hold no content to sync.
+  return null;
 }
 
 /** Split a field list into what fits here and what doesn't, with reasons. */

@@ -4,7 +4,10 @@ import {
   IconAlignLeft,
   IconAlignRight,
   IconBold,
+  IconHand,
   IconItalic,
+  IconRedo,
+  IconUndo,
   IconZoomIn,
   IconZoomOut,
 } from '../components/Icons';
@@ -20,9 +23,9 @@ import { CanvasContextMenu, type CanvasTarget } from './CanvasContextMenu';
 import { useEditor } from './EditorProvider';
 import { PageSurface } from './PageSurface';
 import { useDragResize } from './useDragResize';
+import { useZoomPan } from './useZoomPan';
 import './canvas.css';
 
-const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];
 const STAGE_PAD = 64;
 const SIZES: TextSize[] = ['xs', 'sm', 'md', 'lg', 'xl'];
 
@@ -37,11 +40,14 @@ function isTypingTarget(el: EventTarget | null): boolean {
 }
 
 export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickInfo) => void }) {
-  const { state, dispatch, readOnly, currentPage } = useEditor();
+  const { state, dispatch, readOnly, currentPage, canUndo, canRedo, undo, redo } = useEditor();
   const [stageRef, stageSize] = useSize<HTMLDivElement>();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const inlineRef = useRef<InlineEditorHandle>(null);
-  const [zoom, setZoom] = useState(1);
+  const { zoom, panning, panReady, zoomIn, zoomOut, resetZoom, onPointerDownCapture } = useZoomPan(
+    stageRef,
+    surfaceRef,
+  );
   const [menu, setMenu] = useState<CanvasTarget | null>(null);
   const [fieldEdit, setFieldEdit] = useState<SyncField | null>(null);
   const { onBlockPointerDown, onHandlePointerDown } = useDragResize(surfaceRef);
@@ -104,7 +110,14 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
   const setBody = useCallback(
     (blockId: string, body: RichText) => {
       if (!currentPage) return;
-      dispatch({ type: 'UPDATE_BLOCK', pageId: currentPage.id, blockId, patch: { body } });
+      // A burst of typing in one block is a single undo step.
+      dispatch({
+        type: 'UPDATE_BLOCK',
+        pageId: currentPage.id,
+        blockId,
+        patch: { body },
+        coalesce: `text:${blockId}`,
+      });
     },
     [currentPage, dispatch],
   );
@@ -128,11 +141,6 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
   const availH = Math.max(0, stageSize.height - STAGE_PAD);
   const fitWidth = Math.max(120, Math.min(availW, availH * aspect));
   const widthPx = fitWidth * zoom;
-
-  const zoomIdx = ZOOM_STEPS.findIndex((z) => z >= zoom - 0.001);
-  const zoomIn = () =>
-    setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, (zoomIdx < 0 ? 3 : zoomIdx) + 1)]);
-  const zoomOut = () => setZoom(ZOOM_STEPS[Math.max(0, (zoomIdx < 0 ? 3 : zoomIdx) - 1)]);
 
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -270,8 +278,9 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
       )}
 
       <div
-        className="stage"
+        className={`stage ${panning ? 'panning' : ''} ${panReady ? 'pan-ready' : ''}`}
         ref={stageRef}
+        onPointerDownCapture={onPointerDownCapture}
         onPointerDown={(e) => {
           if (e.target === e.currentTarget) dispatch({ type: 'CLEAR_SELECT' });
         }}
@@ -321,20 +330,46 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
       )}
 
       <div className="zoom-dock">
-        <button className="icon-btn" onClick={zoomOut} aria-label="Zoom out" title="Zoom out">
+        <button
+          className="icon-btn"
+          title={`Undo — ${state.past.length} step${state.past.length === 1 ? '' : 's'} (Ctrl+Z)`}
+          aria-label="Undo"
+          disabled={!canUndo}
+          onClick={undo}
+        >
+          <IconUndo size={15} />
+        </button>
+        <button
+          className="icon-btn"
+          title={`Redo — ${state.future.length} step${state.future.length === 1 ? '' : 's'} (Ctrl+Shift+Z)`}
+          aria-label="Redo"
+          disabled={!canRedo}
+          onClick={redo}
+        >
+          <IconRedo size={15} />
+        </button>
+        <span className="dock-sep" />
+        <button className="icon-btn" onClick={zoomOut} aria-label="Zoom out" title="Zoom out (Ctrl+−)">
           <IconZoomOut size={15} />
         </button>
         <button
           className="zoom-label"
-          style={{ border: 'none', background: 'transparent' }}
-          onClick={() => setZoom(1)}
-          title="Reset zoom"
+          onClick={resetZoom}
+          title="Reset to 100% (Ctrl+0)"
+          aria-label="Reset zoom"
         >
           {Math.round(zoom * 100)}%
         </button>
-        <button className="icon-btn" onClick={zoomIn} aria-label="Zoom in" title="Zoom in">
+        <button className="icon-btn" onClick={zoomIn} aria-label="Zoom in" title="Zoom in (Ctrl++)">
           <IconZoomIn size={15} />
         </button>
+        <span className="dock-sep" />
+        <span
+          className={`dock-hint ${panReady ? 'active' : ''}`}
+          title="Middle-drag, or hold Space and drag, to pan. Ctrl/⌘ + wheel or a trackpad pinch zooms."
+        >
+          <IconHand size={14} />
+        </span>
       </div>
     </div>
   );

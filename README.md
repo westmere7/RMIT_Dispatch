@@ -17,11 +17,20 @@ enforcement via RLS.
 1. **Create a Supabase project** (free) at [supabase.com](https://supabase.com).
 
 2. **Run the schema**: open the project's *SQL Editor*, paste the entire contents of
-   [`supabase/schema.sql`](supabase/schema.sql), and run it. If you set the project up
-   before sync-field scopes existed, also run
-   [`supabase/migrations/002_field_scope_and_folders.sql`](supabase/migrations/002_field_scope_and_folders.sql). It creates all tables,
+   [`supabase/schema.sql`](supabase/schema.sql), and run it. It creates all tables,
    RLS policies, triggers, the realtime publication and the public `media` storage
    bucket. The script is idempotent — safe to re-run.
+
+   Then run everything in [`supabase/migrations/`](supabase/migrations) in order:
+
+   | Migration | Adds |
+   | --- | --- |
+   | [`002_field_scope_and_folders.sql`](supabase/migrations/002_field_scope_and_folders.sql) | sync-field scope (local/global) and folders |
+   | [`003_settings_and_undo.sql`](supabase/migrations/003_settings_and_undo.sql) | per-account settings and cloud-saved undo |
+   | [`004_project_folders_and_flags.sql`](supabase/migrations/004_project_folders_and_flags.sql) | project folders and colour flags |
+
+   Each is idempotent too. If the app is ahead of the database it says which
+   migration is missing rather than failing silently.
 
 3. **(Recommended for local testing)** In *Authentication → Providers → Email*, turn
    **off** "Confirm email" so sign-ups work instantly without an SMTP setup.
@@ -65,15 +74,18 @@ comments update in realtime. (`server.bat` passes `--host` so both origins resol
 - **Space** — a team. Members have a role: `admin` / `editor` (create, lock, edit,
   finalize, restore, manage sync fields and adaptations) or `designer` (read-only +
   comments). RLS restricts every row to members of its space.
-- **Project** — one **master** document plus any number of **adaptations**.
-  *Project settings* (on the project page) reopens the setup panel to change the
-  title, type and master format later.
+- **Project** — one **master** document plus a tree of **adaptations**. An adaptation
+  may itself be derived from another adaptation, up to two levels below the master,
+  and each one follows the document directly above it. The project page draws that
+  lineage with connector rails and a "follows X" line on every child; deleting or
+  detaching a parent leaves its children with plain copies rather than dead links.
+- **Every document carries its own settings** — page size, orientation, grid and
+  margins live on the document, not the project, because a flyer is not an A4 guide.
+  Open them from the gear on any row. A document's grid can only be refined, never
+  coarsened, and refining rescales that document's blocks alone.
 - **Grid** — cells are always **square**. You choose the column count; the row
   count is derived from the page proportions, so a 2×2 block is always a square.
   Granularity runs from Simple (6 columns) to Micro (48), or any custom count.
-  Once a project exists the grid can only be **refined**, never coarsened —
-  enlarging cells would throw away layout precision that existing documents
-  depend on. Refining rescales existing blocks so the layout keeps its shape.
 - **Editing text** — double-click a text block on the page (or press Enter with it
   selected) to type directly on the canvas. A format bar appears with bold, italic,
   colour, five sizes (XS–XL), alignment and **Field**, so sync fields can be made
@@ -97,6 +109,10 @@ comments update in realtime. (`server.bat` passes `--host` so both origins resol
   how many times this document embeds it. Hovering a row reveals actions: edit in
   isolation (pen), change scope, move to a folder, delete. A filter box narrows long
   lists, and WHERE USED lists live embeds you can jump to.
+- **Values open in a popup** — no list ever prints a field's contents. Each row shows
+  a compact chip; clicking it opens the full value (text as paragraphs, a table as its
+  real grid) together with that field's actions — edit, move to folder, change scope,
+  delete. In the Sync panel the field name opens the same popup.
 - **Fields hold plain content** — a field value never stores bold, italic or colour.
   Styling belongs to the block that embeds the field, so the same value can appear as a
   heading in one document and body copy in another without fighting its host. Stripping

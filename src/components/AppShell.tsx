@@ -1,7 +1,15 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import { useSpaces } from '../store/spaces';
-import { IconBell, IconGrid, IconLink, IconLogout, IconSearch, IconUsers } from './Icons';
+import {
+  IconBell,
+  IconGrid,
+  IconLink,
+  IconLogout,
+  IconSearch,
+  IconSliders,
+  IconUsers,
+} from './Icons';
 import { RoleBadge } from './RoleBadge';
 import { SpaceSwitcher } from './SpaceSwitcher';
 import { ThemeToggle } from './ThemeToggle';
@@ -47,7 +55,7 @@ export function AppShell() {
               R
             </Link>
             <button
-              className={`rail-btn ${!isWorkspace && location.pathname !== '/space' && location.pathname !== '/fields' ? 'active' : ''}`}
+              className={`rail-btn ${!isWorkspace && location.pathname !== '/space' && location.pathname !== '/fields' && location.pathname !== '/settings' ? 'active' : ''}`}
               data-tip="Projects"
               aria-label="Projects"
               onClick={() => navigate('/')}
@@ -69,6 +77,14 @@ export function AppShell() {
               onClick={() => navigate('/space')}
             >
               <IconUsers size={19} />
+            </button>
+            <button
+              className={`rail-btn ${location.pathname === '/settings' ? 'active' : ''}`}
+              data-tip="Settings"
+              aria-label="Settings"
+              onClick={() => navigate('/settings')}
+            >
+              <IconSliders size={19} />
             </button>
             <div className="rail-spacer" />
             <button

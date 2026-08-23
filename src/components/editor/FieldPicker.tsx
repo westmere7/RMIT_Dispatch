@@ -1,19 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { fieldShapeLabel, partitionByFit, type FieldTarget } from '../../lib/fieldtypes';
-import { plainText } from '../../lib/richtext';
-import { valueAsRich, valueAsTable } from '../../lib/syncfields';
 import type { SyncField } from '../../types';
 import { IconSearch } from '../Icons';
+import { shortLabel } from './FieldPeek';
 
 /** Short preview of any field shape, for menu rows and tooltips. */
 export function fieldPreview(field: SyncField): string {
-  const table = valueAsTable(field.value);
-  if (table) {
-    const cols = table.rows[0]?.length ?? 0;
-    const head = (table.rows[0] ?? []).map((c) => plainText(c)).join(' · ');
-    return `${table.rows.length}×${cols} table${head ? ` — ${head}` : ''}`;
-  }
-  return plainText(valueAsRich(field.value));
+  return shortLabel(field.value);
 }
 
 /**

@@ -1,6 +1,6 @@
 import { newId } from '../lib/ids';
 import { supabase } from '../lib/supabase';
-import type { GridConfig, Page, Project } from '../types';
+import type { GridConfig, Page, Project, ProjectFlag } from '../types';
 import { createDocument } from './documents';
 
 function map(r: Record<string, unknown>): Project {
@@ -9,6 +9,8 @@ function map(r: Record<string, unknown>): Project {
     spaceId: r.space_id as string,
     title: r.title as string,
     type: r.type as string,
+    folder: (r.folder as string) ?? '',
+    flag: (r.flag as Project['flag']) ?? null,
     createdBy: r.created_by as string,
     createdAt: r.created_at as string,
   };
@@ -75,4 +77,29 @@ export async function renameProject(id: string, title: string) {
 export async function updateProjectMeta(id: string, patch: { title?: string; type?: string }) {
   const { error } = await supabase.from('projects').update(patch).eq('id', id);
   if (error) throw error;
+}
+
+/** Move a project into a folder ('' = root). */
+export async function setProjectFolder(id: string, folder: string) {
+  const { error } = await supabase.from('projects').update({ folder }).eq('id', id);
+  if (error) throw error;
+}
+
+export async function setProjectFlag(id: string, flag: ProjectFlag | null) {
+  const { error } = await supabase.from('projects').update({ flag }).eq('id', id);
+  if (error) throw error;
+}
+
+/** Rename a folder and everything nested beneath it. */
+export async function renameProjectFolder(
+  projects: Project[],
+  oldPath: string,
+  newPath: string,
+): Promise<void> {
+  const affected = projects.filter(
+    (p) => p.folder === oldPath || p.folder.startsWith(`${oldPath}/`),
+  );
+  await Promise.all(
+    affected.map((p) => setProjectFolder(p.id, newPath + p.folder.slice(oldPath.length))),
+  );
 }

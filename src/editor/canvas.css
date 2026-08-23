@@ -32,6 +32,9 @@
   min-height: 0;
   overflow: auto;
   scrollbar-gutter: stable;
+  /* The zoom anchor sets scroll itself; browser scroll anchoring would
+     fight it as the surface resizes. */
+  overflow-anchor: none;
   display: flex;
   align-items: safe center;
   justify-content: safe center;
@@ -304,7 +307,8 @@
   min-height: 0;
 }
 .side-panel.left {
-  width: 168px;
+  /* Wide enough that the add-page buttons never clip. */
+  width: 200px;
   border-left: none;
   border-right: 1px solid var(--border);
 }
@@ -496,13 +500,54 @@
   bottom: 16px;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 999px;
-  box-shadow: var(--shadow-sm);
-  padding: 2px;
+  box-shadow: var(--shadow);
+  padding: 3px;
   z-index: 10;
+}
+.zoom-dock .icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+}
+.zoom-dock .icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.dock-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 3px 3px;
+}
+.dock-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--text-muted);
+  border-radius: 999px;
+  cursor: help;
+}
+.dock-hint.active {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+/* Pan affordances on the stage. */
+.stage.pan-ready {
+  cursor: grab;
+}
+.stage.panning {
+  cursor: grabbing;
+}
+/* While panning, nothing inside should react to the pointer. */
+.stage.panning * {
+  pointer-events: none;
 }
 .zoom-controls {
   display: inline-flex;
@@ -512,11 +557,22 @@
 }
 .zoom-label,
 .zoom-controls .zoom-label {
-  min-width: 44px;
+  min-width: 46px;
+  height: 28px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
   text-align: center;
+  font-family: inherit;
   font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   cursor: pointer;
+  border-radius: 999px;
+}
+.zoom-label:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 /* Presence avatars */

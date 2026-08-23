@@ -1,6 +1,8 @@
 import type {
   Block,
+  FieldPart,
   FieldValue,
+  ImagePayload,
   InlineNode,
   Page,
   RichText,
@@ -19,13 +21,56 @@ export function toFieldMap(fields: SyncField[]): FieldMap {
 export function valueAsRich(value: FieldValue): RichText {
   if (value.kind === 'richtext') return value.rich;
   if (value.kind === 'scalar') return [[{ text: value.text }]];
-  // A table flattened for preview purposes only.
-  return value.rows.map((row) => row.flatMap((cell, i) => (i ? [{ text: ' · ' }, ...cell.flat()] : cell.flat())));
+  if (value.kind === 'table') {
+    // Flattened for preview purposes only.
+    return value.rows.map((row) =>
+      row.flatMap((cell, i) => (i ? [{ text: ' · ' }, ...cell.flat()] : cell.flat())),
+    );
+  }
+  if (value.kind === 'image') return [[{ text: value.caption || value.alt || '' }]];
+  // A combination: concatenate whatever its text-bearing parts hold.
+  return value.parts.flatMap((part) =>
+    part.kind === 'text'
+      ? part.rich
+      : part.kind === 'table'
+        ? part.rows.map((row) =>
+            row.flatMap((cell, i) => (i ? [{ text: ' · ' }, ...cell.flat()] : cell.flat())),
+          )
+        : [[{ text: part.caption || part.alt || '' }]],
+  );
 }
 
 /** Table payload of a field, or null when it isn't a table field. */
 export function valueAsTable(value: FieldValue): { headerRow: boolean; rows: RichText[][] } | null {
   return value.kind === 'table' ? { headerRow: value.headerRow, rows: value.rows } : null;
+}
+
+/** Image payload of a field, or null when it isn't an image field. */
+export function valueAsImage(value: FieldValue): ImagePayload | null {
+  return value.kind === 'image' ? value : null;
+}
+
+/** Every image path referenced by a document's pages. */
+export function pageMediaPaths(pages: Page[]): string[] {
+  const out: string[] = [];
+  for (const page of pages) {
+    for (const b of page.blocks) {
+      if (b.type === 'image' && b.storagePath) out.push(b.storagePath);
+    }
+  }
+  return out;
+}
+
+/** Every storage path a field value owns — used to clean up on delete. */
+export function valueMediaPaths(value: FieldValue): string[] {
+  if (value.kind === 'image') return value.storagePath ? [value.storagePath] : [];
+  if (value.kind === 'group') {
+    return value.parts
+      .filter((p): p is Extract<FieldPart, { kind: 'image' }> => p.kind === 'image')
+      .map((p) => p.storagePath)
+      .filter((p): p is string => !!p);
+  }
+  return [];
 }
 
 /* ============================================================
@@ -184,12 +229,24 @@ export function applySyncDown(
     blocks: page.blocks.map((block) => {
       let b: Block = JSON.parse(JSON.stringify(block)) as Block;
 
-      // 1) Whole-block binding.
-      if (b.binding && b.binding.direction !== 'up') {
-        if (b.binding.fieldId) {
-          const field = fields.get(b.binding.fieldId);
+      // 1) Whole-block binding. Read the ids up front: reassigning `b`
+      //    below would otherwise lose the narrowing on b.binding.
+      const binding = b.binding;
+      if (binding && binding.direction !== 'up') {
+        const boundFieldId = binding.fieldId;
+        if (boundFieldId) {
+          const field = fields.get(boundFieldId);
+          const img = field ? valueAsImage(field.value) : null;
           const table = field ? valueAsTable(field.value) : null;
-          if (table && b.type === 'table') {
+          if (img && b.type === 'image') {
+            b = {
+              ...b,
+              storagePath: img.storagePath,
+              alt: img.alt,
+              caption: img.caption,
+              fit: img.fit ?? b.fit,
+            };
+          } else if (table && b.type === 'table') {
             b = {
               ...b,
               headerRow: table.headerRow,
@@ -197,12 +254,12 @@ export function applySyncDown(
                 row.map((cell) => cell.map((para) => refreshNodes(para, fields, new Set()))),
               ),
             };
-          } else {
-            const rich = resolveFieldRich(b.binding.fieldId, fields);
-            if (rich && b.type === 'text') b = { ...b, body: rich };
+          } else if (b.type === 'text') {
+            const rich = resolveFieldRich(boundFieldId, fields);
+            if (rich) b = { ...b, body: rich };
           }
         } else if (masterBlocks) {
-          const src = masterBlocks.get(b.binding.sourceBlockId);
+          const src = masterBlocks.get(binding.sourceBlockId);
           if (src) b = copyBlockContent(b, src);
         }
       }
@@ -295,6 +352,28 @@ export function collectUpstream(pages: Page[], fields: FieldMap): UpstreamChange
               value: { kind: 'richtext', rich: cloneRich(block.body) },
               preview: plainText(block.body).slice(0, 80),
             });
+          }
+          if (field && block.type === 'image') {
+            const img = valueAsImage(field.value);
+            const changed =
+              !img ||
+              img.storagePath !== block.storagePath ||
+              (img.alt ?? '') !== (block.alt ?? '') ||
+              (img.caption ?? '') !== (block.caption ?? '');
+            if (changed) {
+              fieldChanges.set(field.id, {
+                fieldId: field.id,
+                fieldName: field.name,
+                value: {
+                  kind: 'image',
+                  storagePath: block.storagePath,
+                  alt: block.alt,
+                  caption: block.caption,
+                  fit: block.fit,
+                },
+                preview: block.alt || block.caption || 'image',
+              });
+            }
           }
           if (field && block.type === 'table') {
             const table = valueAsTable(field.value);

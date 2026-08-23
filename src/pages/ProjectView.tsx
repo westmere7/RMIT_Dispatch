@@ -1,15 +1,41 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCrumbs } from '../components/AppShell';
-import { GridPreview } from '../components/GridPreview';
-import { IconLock, IconPlus, IconSettings, IconTrash } from '../components/Icons';
-import { NewAdaptationPanel } from '../components/NewAdaptationPanel';
-import { ProjectPanel, type ProjectPanelValues } from '../components/ProjectPanel';
+import { flagColor, flagLabel } from '../lib/flags';
 import { useDialog } from '../components/Dialog';
-import { effectiveColumns } from '../grid/presets';
+import { GridPreview } from '../components/GridPreview';
+import {
+  IconLock,
+  IconMessage,
+  IconPlus,
+  IconSettings,
+  IconTrash,
+  IconUnlink,
+} from '../components/Icons';
+import {
+  DocumentSettingsPanel,
+  type DocumentSettingsValues,
+} from '../components/DocumentSettingsPanel';
+import { NewAdaptationPanel } from '../components/NewAdaptationPanel';
+import { canvasAspect, effectiveColumns } from '../grid/presets';
 import { clampPos, rescalePages } from '../lib/blocks';
+import {
+  buildDocTree,
+  canHaveChild,
+  flattenDocTree,
+  LIN_COL,
+  MAX_ADAPTATION_DEPTH,
+  railColumn,
+  type FlatDoc,
+} from '../lib/doctree';
 import { newId } from '../lib/ids';
-import { cloneForAdaptation, collectUpstream, collectUsages, stripAllBindings, toFieldMap } from '../lib/syncfields';
+import {
+  cloneForAdaptation,
+  collectUpstream,
+  collectUsages,
+  stripAllBindings,
+  toFieldMap,
+} from '../lib/syncfields';
 import { useAuth } from '../store/auth';
 import {
   createDocument,
@@ -17,6 +43,7 @@ import {
   fetchDocuments,
   updateDocumentMeta,
 } from '../store/documents';
+import { fetchCommentCounts } from '../store/comments';
 import { fetchDraft, saveDraft } from '../store/drafts';
 import { fetchFieldsForProject } from '../store/fields';
 import { fetchProject, updateProjectMeta } from '../store/projects';
@@ -32,6 +59,16 @@ interface DocRow {
 
 type Filter = 'all' | 'master' | 'adaptation';
 
+/** Human name for a document's position in the lineage. */
+function depthLabel(depth: number): string {
+  if (depth <= 0) return 'Master';
+  return depth === 1 ? 'Adaptation' : 'Sub-adaptation';
+}
+
+/** Thumbnail box — a fixed frame keeps every card the same height. */
+const THUMB_W = 68;
+const THUMB_H = 46;
+
 export function ProjectView() {
   const { projectId } = useParams<{ projectId: string }>();
   const { setCrumbs } = useCrumbs();
@@ -43,9 +80,12 @@ export function ProjectView() {
   const [project, setProject] = useState<Project | null>(null);
   const [rows, setRows] = useState<DocRow[]>([]);
   const [fields, setFields] = useState<SyncField[]>([]);
+  const [comments, setComments] = useState<Map<string, { total: number; open: number }>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [showNew, setShowNew] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  /** Parent the "new adaptation" panel is deriving from. */
+  const [newParent, setNewParent] = useState<DispatchDocument | null>(null);
+  /** Document whose settings panel is open. */
+  const [settingsFor, setSettingsFor] = useState<DispatchDocument | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
 
@@ -69,17 +109,17 @@ export function ProjectView() {
         docs.map(async (doc) => {
           const draft = await fetchDraft(doc.id);
           const pages = draft?.pages ?? [];
-          const usages = collectUsages(pages);
           const pending = collectUpstream(pages, fieldMap);
           return {
             doc,
             pages,
-            usageCount: usages.length,
+            usageCount: collectUsages(pages).length,
             pendingCount: pending.fields.length + pending.blocks.length,
           };
         }),
       );
       setRows(withDrafts);
+      setComments(await fetchCommentCounts(docs.map((d) => d.id)));
     } finally {
       setLoading(false);
     }
@@ -98,16 +138,44 @@ export function ProjectView() {
     ]);
   }, [setCrumbs, project]);
 
-  const master = useMemo(() => rows.find((r) => r.doc.kind === 'master'), [rows]);
-  const adaptations = useMemo(() => rows.filter((r) => r.doc.kind === 'adaptation'), [rows]);
+  const tree = useMemo(() => buildDocTree(rows), [rows]);
+  const flat = useMemo<FlatDoc<DocRow>[]>(() => {
+    const out: FlatDoc<DocRow>[] = [];
+    if (tree.master) flattenDocTree(tree.master, out);
+    // Detached adaptations render at depth 1 with no ancestor rails.
+    tree.orphans.forEach((o, i) => flattenDocTree(o, out, i === tree.orphans.length - 1, []));
+    return out;
+  }, [tree]);
 
+  const visible = useMemo(
+    () =>
+      flat.filter(({ node }) => {
+        if (filter === 'all') return true;
+        if (filter === 'master') return node.doc.doc.kind === 'master';
+        return node.doc.doc.kind === 'adaptation';
+      }),
+    [flat, filter],
+  );
+
+  // buildDocTree wraps rows, so unwrap twice to reach the document.
+  const master = tree.master?.doc.doc ?? null;
+  const adaptationCount = rows.filter((r) => r.doc.kind === 'adaptation').length;
+
+  /** Derive a new adaptation from `parent` (the master or an adaptation). */
   const createAdaptation = async (args: { title: string; grid: GridConfig }) => {
-    if (!master || !user || !projectId) return;
+    const parent = newParent;
+    if (!parent || !user || !projectId) return;
+    const parentRow = rows.find((r) => r.doc.id === parent.id);
+    if (!parentRow) return;
     setBusy(true);
     try {
-      // Deep-clone the master's pages; every block gets a `down` binding to
-      // its master source, then clamp to the target grid.
-      const cloned = cloneForAdaptation(master.pages, () => newId('blk'), () => newId('pg'));
+      // Clone the PARENT's pages; every block gets a `down` binding to its
+      // source there, so a chain of adaptations each follows its own parent.
+      const cloned = cloneForAdaptation(
+        parentRow.pages,
+        () => newId('blk'),
+        () => newId('pg'),
+      );
       const clamped = cloned.map((page) => {
         const cols = effectiveColumns(args.grid, page.kind);
         return {
@@ -118,13 +186,13 @@ export function ProjectView() {
       const doc = await createDocument({
         projectId,
         kind: 'adaptation',
-        parentId: master.doc.id,
+        parentId: parent.id,
         title: args.title,
         grid: args.grid,
         userId: user.uid,
         pages: clamped,
       });
-      setShowNew(false);
+      setNewParent(null);
       navigate(`/docs/${doc.id}`);
     } finally {
       setBusy(false);
@@ -132,63 +200,93 @@ export function ProjectView() {
   };
 
   /**
-   * Save project settings. A refined grid rescales the master's blocks so
-   * the layout keeps its proportions instead of bunching up top-left.
+   * Save one document's settings. A refined grid rescales only that
+   * document's blocks; siblings and the master are untouched. Editing the
+   * master's title renames the project too — they are the same thing.
    */
-  const saveSettings = async (values: ProjectPanelValues) => {
-    if (!master || !user || !projectId) return;
+  const saveSettings = async (values: DocumentSettingsValues) => {
+    const target = settingsFor;
+    if (!target || !user || !projectId) return;
     setBusy(true);
     try {
-      await updateProjectMeta(projectId, { title: values.title, type: values.type });
-      const oldGrid = master.doc.grid;
+      const isMaster = target.kind === 'master';
+      if (isMaster) {
+        await updateProjectMeta(projectId, {
+          title: values.title,
+          ...(values.type !== undefined ? { type: values.type } : {}),
+        });
+      }
+      const oldGrid = target.grid;
       const gridChanged = JSON.stringify(oldGrid) !== JSON.stringify(values.grid);
       if (gridChanged) {
-        await updateDocumentMeta(master.doc.id, { title: values.title, grid: values.grid });
-        const draft = await fetchDraft(master.doc.id);
+        await updateDocumentMeta(target.id, { title: values.title, grid: values.grid });
+        const draft = await fetchDraft(target.id);
         if (draft) {
-          await saveDraft(master.doc.id, rescalePages(draft.pages, oldGrid, values.grid), user.uid);
+          await saveDraft(target.id, rescalePages(draft.pages, oldGrid, values.grid), user.uid);
         }
-      } else if (values.title !== master.doc.title) {
-        await updateDocumentMeta(master.doc.id, { title: values.title });
+      } else if (values.title !== target.title) {
+        await updateDocumentMeta(target.id, { title: values.title });
       }
-      setShowSettings(false);
+      setSettingsFor(null);
       await load();
     } finally {
       setBusy(false);
     }
   };
 
-  const deleteMaster = async () => {
-    if (!master || !user) return;
-    const ok = await dialog.confirm(`Delete master “${master.doc.title}”?`, {
-      message: `All ${adaptations.length} adaptation(s) will be unlinked and keep plain copies of their content. This cannot be undone.`,
-      confirmLabel: 'Delete master',
-      danger: true,
+  /** Detach every descendant so deleting a parent never orphans bindings. */
+  const detachChildren = async (parentId: string) => {
+    if (!user) return;
+    const kids = rows.filter((r) => r.doc.parentId === parentId);
+    for (const kid of kids) {
+      const draft = await fetchDraft(kid.doc.id);
+      if (draft) await saveDraft(kid.doc.id, stripAllBindings(draft.pages), user.uid);
+      await updateDocumentMeta(kid.doc.id, { parentId: null });
+    }
+  };
+
+  const removeDoc = async (row: DocRow) => {
+    if (!user) return;
+    const kids = rows.filter((r) => r.doc.parentId === row.doc.id);
+    const isMaster = row.doc.kind === 'master';
+    const ok = await dialog.confirm(
+      isMaster ? `Delete master “${row.doc.title}”?` : `Delete “${row.doc.title}”?`,
+      {
+        message: kids.length
+          ? `${kids.length} adaptation(s) derived from it will be unlinked and keep plain copies of their content. This cannot be undone.`
+          : 'This cannot be undone.',
+        confirmLabel: isMaster ? 'Delete master' : 'Delete',
+        danger: true,
+      },
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await detachChildren(row.doc.id);
+      await deleteDocument(row.doc.id);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Detach an adaptation from its parent without deleting anything. */
+  const detachFromParent = async (row: DocRow) => {
+    if (!user) return;
+    const ok = await dialog.confirm(`Detach “${row.doc.title}” from its parent?`, {
+      message: 'It keeps its current content as a plain copy and stops following the parent.',
+      confirmLabel: 'Detach',
     });
     if (!ok) return;
     setBusy(true);
     try {
-      for (const a of adaptations) {
-        const draft = await fetchDraft(a.doc.id);
-        if (draft) await saveDraft(a.doc.id, stripAllBindings(draft.pages), user.uid);
-        await updateDocumentMeta(a.doc.id, { parentId: null });
-      }
-      await deleteDocument(master.doc.id);
+      const draft = await fetchDraft(row.doc.id);
+      if (draft) await saveDraft(row.doc.id, stripAllBindings(draft.pages), user.uid);
+      await updateDocumentMeta(row.doc.id, { parentId: null });
       await load();
     } finally {
       setBusy(false);
     }
-  };
-
-  const deleteAdaptation = async (row: DocRow) => {
-    const ok = await dialog.confirm(`Delete adaptation “${row.doc.title}”?`, {
-      message: 'This cannot be undone.',
-      confirmLabel: 'Delete',
-      danger: true,
-    });
-    if (!ok) return;
-    await deleteDocument(row.doc.id);
-    await load();
   };
 
   if (loading) {
@@ -206,81 +304,26 @@ export function ProjectView() {
     );
   }
 
-  const Row = ({ row, isMaster }: { row: DocRow; isMaster: boolean }) => {
-    const { doc } = row;
-    const accent = doc.lock
-      ? 'accent-attention'
-      : isMaster
-        ? 'accent-master'
-        : row.pendingCount > 0
-          ? 'accent-pending'
-          : 'accent-synced';
-    return (
-      <div
-        className={`card card-accent ${accent}`}
-        style={{
-          padding: 'var(--space-3) var(--space-4)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-4)',
-          cursor: 'pointer',
-        }}
-        onClick={() => navigate(`/docs/${doc.id}`)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && navigate(`/docs/${doc.id}`)}
-      >
-        <GridPreview grid={doc.grid} page={row.pages[0]} width={72} showGrid={false} />
+  return (
+    <div className="content-pad" style={{ maxWidth: 1280 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h3>{doc.title}</h3>
-            {isMaster && <span className="pill pill-accent">Master</span>}
+            {flagColor(project.flag) && (
+              <span
+                className="pj-flag-dot"
+                style={{ ['--pj-flag' as string]: flagColor(project.flag) } as React.CSSProperties}
+                title={flagLabel(project.flag) ?? undefined}
+              />
+            )}
+            <h2>{project.title}</h2>
           </div>
-          <div className="muted text-xs" style={{ marginTop: 2 }}>
-            {doc.grid.pageSize} {doc.grid.orientation} · {doc.grid.columns}×{doc.grid.rows} ·{' '}
-            {row.pages.length} page{row.pages.length === 1 ? '' : 's'} · v{doc.versionCount}
+          <div className="muted text-xs">
+            {project.folder ? `${project.folder} · ` : ''}
+            {project.type || 'Project'} · {adaptationCount} adaptation
+            {adaptationCount === 1 ? '' : 's'} · {fields.length} sync field
+            {fields.length === 1 ? '' : 's'}
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {isMaster ? (
-            <span className="pill">{fields.length} sync fields</span>
-          ) : (
-            <>
-              <span className="pill pill-success">{row.usageCount} synced</span>
-              {row.pendingCount > 0 && (
-                <span className="pill pill-warning">{row.pendingCount} pending ↑</span>
-              )}
-            </>
-          )}
-          {doc.lock && (
-            <span className="pill pill-primary">
-              <IconLock size={11} /> {doc.lock.displayName}
-            </span>
-          )}
-          {canEdit && (
-            <button
-              className="icon-btn"
-              aria-label={`Delete ${doc.title}`}
-              title="Delete"
-              onClick={(e) => {
-                e.stopPropagation();
-                void (isMaster ? deleteMaster() : deleteAdaptation(row));
-              }}
-            >
-              <IconTrash size={15} />
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="content-pad" style={{ maxWidth: 900 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <div style={{ flex: 1 }}>
-          <h2>{project.title}</h2>
-          <div className="muted text-xs">{project.type || 'Project'}</div>
         </div>
         <div className="segmented">
           {(['all', 'master', 'adaptation'] as Filter[]).map((f) => (
@@ -289,51 +332,199 @@ export function ProjectView() {
             </button>
           ))}
         </div>
-        {canEdit && master && (
-          <>
-            <button className="btn" onClick={() => setShowSettings(true)} disabled={busy}>
-              <IconSettings size={15} /> Project settings
-            </button>
-            <button className="btn btn-primary" onClick={() => setShowNew(true)} disabled={busy}>
-              <IconPlus size={15} /> New adaptation
-            </button>
-          </>
-        )}
+
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        {master && filter !== 'adaptation' && <Row row={master} isMaster />}
+      <p className="muted text-xs" style={{ margin: '8px 0 18px' }}>
+        Each adaptation follows the document directly above it in the tree. Adaptations can be
+        derived from other adaptations, up to {MAX_ADAPTATION_DEPTH} levels below the master.
+      </p>
 
-        {filter !== 'master' && adaptations.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', paddingLeft: 'var(--space-6)', borderLeft: '1px solid var(--border)', marginLeft: 'var(--space-3)' }}>
-            {adaptations.map((row) => (
-              <Row key={row.doc.id} row={row} isMaster={false} />
-            ))}
-          </div>
-        )}
-        {filter !== 'master' && adaptations.length === 0 && (
-          <p className="muted text-sm" style={{ paddingLeft: 'var(--space-6)' }}>
-            No adaptations yet — derive a flyer, banner or guide page from the master.
-          </p>
-        )}
-        {!master && <p className="muted">This project has no master document.</p>}
+      {!master && rows.length === 0 && <p className="muted">This project has no documents.</p>}
+
+      <div className="lineage">
+        {visible.map(({ node, isLast, rails }) => {
+          const row = node.doc;
+          const doc = row.doc;
+          const isMaster = doc.kind === 'master';
+          const parentRow = doc.parentId ? rows.find((r) => r.doc.id === doc.parentId) : null;
+          const allowChild = canHaveChild(node.depth);
+
+          return (
+            <div
+              key={doc.id}
+              className={`lin-item depth-${node.depth}`}
+              style={{ ['--lin-depth' as string]: node.depth }}
+            >
+              {/* Ancestor rails passing this row, plus this row's own elbow. */}
+              {rails.map((x) => (
+                <span key={x} className="lin-rail" style={{ left: x }} />
+              ))}
+              {node.depth > 0 && (
+                <>
+                  <span className="lin-elbow" style={{ left: railColumn(node.depth) }} />
+                  {!isLast && (
+                    <span className="lin-rail continues" style={{ left: railColumn(node.depth) }} />
+                  )}
+                </>
+              )}
+
+              <div
+                className={`lin-card ${isMaster ? 'is-master' : ''} ${doc.lock ? 'is-locked' : ''}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => navigate(`/docs/${doc.id}`)}
+                onKeyDown={(e) => e.key === 'Enter' && navigate(`/docs/${doc.id}`)}
+              >
+                <div className="lin-thumb">
+                  {/* Fit inside a fixed frame so the row height never varies
+                      with the document's page proportions. */}
+                  <GridPreview
+                    grid={doc.grid}
+                    page={row.pages[0]}
+                    width={Math.min(THUMB_W, THUMB_H * canvasAspect(doc.grid, 'single'))}
+                    showGrid={false}
+                  />
+                </div>
+
+                <div className="lin-body">
+                  <div className="lin-title-row">
+                    <span className="lin-title">{doc.title}</span>
+                    <span className={`pill ${isMaster ? 'pill-accent' : ''}`}>
+                      {depthLabel(node.depth)}
+                    </span>
+                    {doc.lock && (
+                      <span className="pill pill-primary">
+                        <IconLock size={10} /> {doc.lock.displayName}
+                      </span>
+                    )}
+                  </div>
+                  <div className="lin-meta">
+                    {doc.grid.pageSize} {doc.grid.orientation} · {doc.grid.columns}×{doc.grid.rows} ·{' '}
+                    {row.pages.length} page{row.pages.length === 1 ? '' : 's'} · v{doc.versionCount}
+                  </div>
+                  {isMaster ? (
+                    <div className="lin-lineage">
+                      Root document — every adaptation derives from this
+                    </div>
+                  ) : parentRow ? (
+                    <div className="lin-lineage">
+                      Adaptation of <strong>{parentRow.doc.title}</strong>
+                    </div>
+                  ) : (
+                    <div className="lin-lineage detached">Detached — no parent</div>
+                  )}
+                </div>
+
+                <div className="lin-stats">
+                  {isMaster ? (
+                    <span className="pill">{fields.length} fields</span>
+                  ) : (
+                    <>
+                      {row.pendingCount > 0 && (
+                        <span className="pill pill-warning">{row.pendingCount} pending ↑</span>
+                      )}
+                      <span className="pill pill-success">{row.usageCount} synced</span>
+                    </>
+                  )}
+                </div>
+
+                <div className="lin-actions" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className={`lin-act ${(comments.get(doc.id)?.open ?? 0) > 0 ? 'has-open' : ''}`}
+                    title={
+                      comments.get(doc.id)
+                        ? `${comments.get(doc.id)!.total} comment(s), ${comments.get(doc.id)!.open} open`
+                        : 'No comments yet'
+                    }
+                    aria-label={`Comments on ${doc.title}`}
+                    onClick={() => navigate(`/docs/${doc.id}?tab=comments`)}
+                  >
+                    <IconMessage size={13} />
+                    <span>{comments.get(doc.id)?.total ?? 0}</span>
+                  </button>
+
+                  {canEdit ? (
+                    <>
+                      <button
+                        className="icon-btn"
+                        title={
+                          allowChild
+                            ? `Derive an adaptation from ${doc.title}`
+                            : `Maximum depth reached (${MAX_ADAPTATION_DEPTH} levels)`
+                        }
+                        aria-label={`New adaptation from ${doc.title}`}
+                        onClick={() => setNewParent(doc)}
+                        disabled={busy || !allowChild}
+                      >
+                        <IconPlus size={14} />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        title={`${doc.title} settings`}
+                        aria-label={`Settings for ${doc.title}`}
+                        onClick={() => setSettingsFor(doc)}
+                        disabled={busy}
+                      >
+                        <IconSettings size={14} />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        title={doc.parentId ? 'Detach from parent' : 'Already detached'}
+                        aria-label={`Detach ${doc.title}`}
+                        onClick={() => void detachFromParent(row)}
+                        disabled={busy || isMaster || !doc.parentId}
+                      >
+                        <IconUnlink size={14} />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        title={isMaster ? 'Delete master' : 'Delete adaptation'}
+                        aria-label={`Delete ${doc.title}`}
+                        onClick={() => void removeDoc(row)}
+                        disabled={busy}
+                      >
+                        <IconTrash size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <span className="lin-actions-spacer" />
+                  )}
+                </div>
+              </div>
+
+              {/* An explicit affordance at the deepest allowed level. */}
+              {canEdit && allowChild && node.children.length === 0 && filter !== 'master' && (
+                <button
+                  className="lin-add"
+                  style={{ marginLeft: node.depth * LIN_COL + LIN_COL }}
+                  onClick={() => setNewParent(doc)}
+                  disabled={busy}
+                >
+                  <IconPlus size={12} /> New adaptation from {doc.title}
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {showSettings && master && (
-        <ProjectPanel
-          mode="edit"
-          initial={{ title: project.title, type: project.type, grid: master.doc.grid }}
+      {settingsFor && (
+        <DocumentSettingsPanel
+          doc={settingsFor}
+          isMaster={settingsFor.kind === 'master'}
+          projectType={project.type}
           onSubmit={(v) => void saveSettings(v)}
-          onClose={() => setShowSettings(false)}
+          onClose={() => setSettingsFor(null)}
           busy={busy}
         />
       )}
 
-      {showNew && master && (
+      {newParent && (
         <NewAdaptationPanel
-          master={master.doc}
+          parent={newParent}
           onCreate={(a) => void createAdaptation(a)}
-          onClose={() => setShowNew(false)}
+          onClose={() => setNewParent(null)}
           busy={busy}
         />
       )}

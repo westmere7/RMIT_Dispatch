@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCrumbs } from '../components/AppShell';
+import { relativeTime } from '../lib/when';
 import { useDialog } from '../components/Dialog';
 import { FieldEditorDialog } from '../components/editor/FieldEditorDialog';
-import { FieldValuePreview } from '../components/editor/FieldValuePreview';
+import { FieldValuePreview } from '../components/editor/FieldPeek';
+import { NewFieldDialog, type NewFieldValues } from '../components/editor/NewFieldDialog';
 import {
   IconChevronDown,
   IconChevronRight,
@@ -25,6 +27,8 @@ import {
   setFieldFolder,
   setFieldScope,
 } from '../store/fields';
+import { deleteMediaMany } from '../store/media';
+import { valueMediaPaths } from '../lib/syncfields';
 import { useSpaces } from '../store/spaces';
 import type { SyncField } from '../types';
 
@@ -65,6 +69,7 @@ export function GlobalFields() {
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('global');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<SyncField | null>(null);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => setCrumbs(['Sync fields']), [setCrumbs]);
 
@@ -118,28 +123,19 @@ export function GlobalFields() {
       return next;
     });
 
-  const createGlobal = async () => {
+  const createGlobal = async (v: NewFieldValues) => {
     if (!user || !currentSpace) return;
-    const name = await dialog.prompt('New global field', {
-      message: 'Every project in this space will be able to use it, e.g. intake-year.',
-      confirmLabel: 'Create',
-    });
-    if (!name?.trim()) return;
-    const folder = await dialog.prompt('Folder (optional)', {
-      message: 'Use a slash to nest, e.g. Pricing/2026.',
-      confirmLabel: 'Create field',
-    });
     const field = await createField({
       projectId: null,
       spaceId: currentSpace.id,
       scope: 'global',
-      folder: normalizeFolder(folder ?? ''),
-      name: name.trim(),
-      value: { kind: 'richtext', rich: [[{ text: name.trim() }]] },
+      folder: v.folder,
+      name: v.name,
+      value: v.value,
       userId: user.uid,
     });
     setFields((prev) => [...prev, field]);
-    setEditing(field);
+    setCreating(false);
   };
 
   const remove = async (f: SyncField) => {
@@ -150,6 +146,8 @@ export function GlobalFields() {
     });
     if (!ok) return;
     await deleteField(f.id);
+    // Any image the field owned is now unreachable — drop it from storage.
+    await deleteMediaMany(valueMediaPaths(f.value));
     setFields((prev) => prev.filter((x) => x.id !== f.id));
   };
 
@@ -201,7 +199,7 @@ export function GlobalFields() {
   const globalCount = fields.filter((f) => f.scope === 'global').length;
 
   return (
-    <div className="content-pad" style={{ maxWidth: 1080 }}>
+    <div className="content-pad">
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
         <div style={{ flex: 1 }}>
           <h2>Sync fields</h2>
@@ -221,13 +219,13 @@ export function GlobalFields() {
           ))}
         </div>
         {canEdit && (
-          <button className="btn btn-primary" onClick={() => void createGlobal()}>
+          <button className="btn btn-primary" onClick={() => setCreating(true)}>
             <IconPlus size={15} /> New global field
           </button>
         )}
       </div>
 
-      <p className="muted text-xs" style={{ marginBottom: 16, maxWidth: 660 }}>
+      <p className="muted text-xs" style={{ marginBottom: 16, maxWidth: 900 }}>
         Global fields are shared by every project in the space — edit one here and every document
         that embeds it updates. Field values hold plain content: styling comes from the block that
         embeds them, while a table field keeps its own row and column structure.
@@ -239,7 +237,7 @@ export function GlobalFields() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card gf-table">
         <div className="gf-toolbar">
           <IconSearch size={13} />
           <input
@@ -273,6 +271,7 @@ export function GlobalFields() {
               <span role="columnheader">Type</span>
               <span role="columnheader">Value</span>
               <span role="columnheader">Available in</span>
+              <span role="columnheader" className="gf-when">Updated</span>
               <span role="columnheader" className="gf-col-actions">
                 {canEdit ? 'Actions' : ''}
               </span>
@@ -300,6 +299,7 @@ export function GlobalFields() {
                   <span />
                   <span />
                   <span />
+                  <span />
                   <span className="gf-col-actions">
                     {canEdit && (
                       <button
@@ -324,12 +324,30 @@ export function GlobalFields() {
                   </span>
                   <span className="gf-type">{fieldShapeLabel(row.field.value)}</span>
                   <span className="gf-value">
-                    <FieldValuePreview value={row.field.value} />
+                    <FieldValuePreview
+                      field={row.field}
+                      actions={{
+                        availability:
+                          row.field.scope === 'global'
+                            ? 'every project in the space'
+                            : (titles.get(row.field.projectId ?? '') ?? 'one project'),
+                        onEdit: canEdit ? () => setEditing(row.field) : undefined,
+                        onMove: canEdit ? () => void move(row.field) : undefined,
+                        onToggleScope:
+                          canEdit && row.field.scope !== 'global'
+                            ? () => void promote(row.field)
+                            : undefined,
+                        onDelete: canEdit ? () => void remove(row.field) : undefined,
+                      }}
+                    />
                   </span>
                   <span className="gf-home">
                     {row.field.scope === 'global'
                       ? 'all projects'
                       : (titles.get(row.field.projectId ?? '') ?? 'project')}
+                  </span>
+                  <span className="gf-when" title={new Date(row.field.updatedAt).toLocaleString()}>
+                    {relativeTime(row.field.updatedAt)}
                   </span>
                   <span className="gf-col-actions fp-actions gf-actions">
                     {canEdit && (
@@ -378,6 +396,17 @@ export function GlobalFields() {
           </div>
         )}
       </div>
+
+      {creating && (
+        <NewFieldDialog
+          spaceId={currentSpace.id}
+          existingFields={fields}
+          defaultScope="global"
+          lockScope
+          onCreate={(v) => void createGlobal(v)}
+          onClose={() => setCreating(false)}
+        />
+      )}
 
       {editing && (
         <FieldEditorDialog

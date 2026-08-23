@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useCrumbs } from '../components/AppShell';
 import {
   IconCheck,
@@ -13,6 +13,7 @@ import {
 import { useDialog } from '../components/Dialog';
 import { BlockInspector } from '../components/editor/BlockInspector';
 import { PageRail } from '../components/editor/PageRail';
+import { InsertFieldButton, ShapeMenu } from '../components/editor/ToolbarInsert';
 import type { SpanClickInfo } from '../editor/BlockFrame';
 import { EditorCanvas } from '../editor/EditorCanvas';
 import { EditorProvider, useEditor } from '../editor/EditorProvider';
@@ -26,6 +27,7 @@ import {
   applySyncDown,
   collectUpstream,
   copyBlockContent,
+  pageMediaPaths,
   toFieldMap,
   type FieldMap,
 } from '../lib/syncfields';
@@ -38,6 +40,7 @@ import {
   releaseLock,
 } from '../store/documents';
 import { fetchDraft, saveDraft } from '../store/drafts';
+import { gcMedia } from '../store/mediagc';
 import { fetchFieldsForProject, updateFieldValue } from '../store/fields';
 import { fetchProject } from '../store/projects';
 import {
@@ -48,7 +51,14 @@ import {
   type PresenceUser,
 } from '../store/realtime';
 import { createVersion } from '../store/versions';
+import { useSettings } from '../store/settings';
 import { useSpaces } from '../store/spaces';
+import {
+  fetchUndoHistory,
+  pruneUndoHistory,
+  pushUndoEntry,
+  truncateUndoAbove,
+} from '../store/undo';
 import type {
   Block,
   DispatchDocument,
@@ -136,6 +146,8 @@ function blockMap(pages: Page[] | null): Map<string, Block> | null {
   return new Map(pages.flatMap((p) => p.blocks.map((b) => [b.id, b] as const)));
 }
 
+const TAB_NAMES: InspectorTab[] = ['properties', 'sync', 'versions', 'comments'];
+
 function WorkspaceLoaded(props: {
   doc: DispatchDocument;
   project: Project;
@@ -146,12 +158,18 @@ function WorkspaceLoaded(props: {
 }) {
   const { user } = useAuth();
   const { canEdit } = useSpaces();
+  const { settings } = useSettings();
   const [doc, setDoc] = useState(props.doc);
   const [fields, setFields] = useState<SyncField[]>(props.fields);
   const [masterPages, setMasterPages] = useState<Page[] | null>(props.masterPages);
   const [comments, setComments] = useState<DocComment[]>([]);
   const [presence, setPresence] = useState<PresenceUser[]>([]);
-  const [tab, setTab] = useState<InspectorTab>('properties');
+  // A ?tab= link (e.g. from a comment badge) opens that panel directly.
+  const [search] = useSearchParams();
+  const [tab, setTab] = useState<InspectorTab>(() => {
+    const wanted = search.get('tab') as InspectorTab | null;
+    return wanted && TAB_NAMES.includes(wanted) ? wanted : 'properties';
+  });
   const [activeSpan, setActiveSpan] = useState<ActiveSpan | null>(null);
   const [versionsKey, setVersionsKey] = useState(0);
 
@@ -162,6 +180,8 @@ function WorkspaceLoaded(props: {
   const readOnly = !isLockHolder || !canEdit;
 
   const sendPatchRef = useRef<((patch: DraftPatch) => void) | null>(null);
+  /** Images referenced at the last save, so removals can be collected. */
+  const mediaRef = useRef<Set<string>>(new Set(pageMediaPaths(props.pages)));
 
   // Initial pages resolved against current fields/master.
   const initialPages = useMemo(
@@ -175,11 +195,17 @@ function WorkspaceLoaded(props: {
       if (!user) return;
       try {
         await saveDraft(doc.id, pages, user.uid);
+        // Any image that left the document is a deletion candidate, but only
+        // gets removed once nothing in the project still points at it.
+        const now = new Set(pageMediaPaths(pages));
+        const gone = [...mediaRef.current].filter((p) => !now.has(p));
+        mediaRef.current = now;
+        if (gone.length) void gcMedia(doc.projectId, props.project.spaceId, gone);
       } catch (e) {
         console.error('draft save failed', e);
       }
     },
-    [doc.id, user],
+    [doc.id, doc.projectId, props.project.spaceId, user],
   );
 
   const onBroadcast = useCallback(
@@ -194,6 +220,54 @@ function WorkspaceLoaded(props: {
     void fetchComments(doc.id).then(setComments);
   }, [doc.id]);
 
+  /* ---------- Cloud undo history ---------- */
+  const undoSeq = useRef(0);
+  const [initialHistory, setInitialHistory] = useState<Page[][] | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await fetchUndoHistory(doc.id, user.uid, settings.undoSteps);
+        if (cancelled) return;
+        undoSeq.current = rows.length ? rows[rows.length - 1].seq : 0;
+        setInitialHistory(rows.map((r) => r.pages));
+      } catch {
+        if (!cancelled) setInitialHistory([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc.id, user?.uid]);
+
+  /** Mirror one undo step to the account's history. */
+  const onUndoStep = useCallback(
+    (pages: Page[]) => {
+      if (!user) return;
+      const seq = ++undoSeq.current;
+      void (async () => {
+        // A fresh edit invalidates any redo branch above this point.
+        await truncateUndoAbove(doc.id, user.uid, seq - 1);
+        try {
+          await pushUndoEntry({
+            documentId: doc.id,
+            userId: user.uid,
+            seq,
+            label: `edit ${seq}`,
+            pages,
+          });
+          if (seq % 10 === 0) await pruneUndoHistory(doc.id, user.uid, settings.undoSteps);
+        } catch (e) {
+          console.warn('undo step not saved', (e as Error).message);
+        }
+      })();
+    },
+    [doc.id, user, settings.undoSteps],
+  );
+
   return (
     <EditorProvider
       initialPages={initialPages}
@@ -201,6 +275,9 @@ function WorkspaceLoaded(props: {
       readOnly={readOnly}
       onPersist={onPersist}
       onBroadcast={onBroadcast}
+      onUndoStep={onUndoStep}
+      undoSteps={settings.undoSteps}
+      autosaveMs={settings.autosaveMs}
     >
       <WorkspaceInner
         doc={doc}
@@ -224,6 +301,7 @@ function WorkspaceLoaded(props: {
         setActiveSpan={setActiveSpan}
         versionsKey={versionsKey}
         bumpVersions={() => setVersionsKey((k) => k + 1)}
+        initialHistory={initialHistory}
       />
     </EditorProvider>
   );
@@ -255,6 +333,7 @@ function WorkspaceInner({
   setActiveSpan,
   versionsKey,
   bumpVersions,
+  initialHistory,
 }: {
   doc: DispatchDocument;
   setDoc: React.Dispatch<React.SetStateAction<DispatchDocument>>;
@@ -277,11 +356,38 @@ function WorkspaceInner({
   setActiveSpan: (s: ActiveSpan | null) => void;
   versionsKey: number;
   bumpVersions: () => void;
+  initialHistory: Page[][] | null;
 }) {
   const { user } = useAuth();
   const { canEdit } = useSpaces();
   const { setCrumbs } = useCrumbs();
-  const { state, dispatch, flush } = useEditor();
+  const { state, dispatch, flush, undo, redo } = useEditor();
+
+  // Seed the undo stack once the cloud history has loaded.
+  useEffect(() => {
+    if (initialHistory && initialHistory.length) {
+      dispatch({ type: 'SET_HISTORY', past: initialHistory });
+    }
+  }, [initialHistory, dispatch]);
+
+  // Ctrl/Cmd+Z and Ctrl+Shift+Z / Ctrl+Y, ignored while typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if ((k === 'z' && e.shiftKey) || k === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
   const dialog = useDialog();
 
   const isHolderRef = useRef(isLockHolder);
@@ -560,6 +666,10 @@ function WorkspaceInner({
                 >
                   <IconImage size={13} /> Image
                 </button>
+                <ShapeMenu pageId={currentPage.id} />
+                <span className="bar-sep" />
+                {/* Works with nothing selected: the field lands in a new block. */}
+                <InsertFieldButton pageId={currentPage.id} />
                 <span style={{ width: 8 }} />
               </>
             )}

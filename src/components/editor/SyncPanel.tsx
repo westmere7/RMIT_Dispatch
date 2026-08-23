@@ -9,8 +9,7 @@ import {
   type FolderNode,
 } from '../../lib/fieldtree';
 import { fieldShapeLabel } from '../../lib/fieldtypes';
-import { plainText } from '../../lib/richtext';
-import { collectUsages, valueAsRich, type FieldUsage } from '../../lib/syncfields';
+import { collectUsages, type FieldUsage } from '../../lib/syncfields';
 import { fetchDocuments } from '../../store/documents';
 import { fetchDraft } from '../../store/drafts';
 import { deleteField, setFieldFolder, setFieldScope } from '../../store/fields';
@@ -26,6 +25,7 @@ import {
   IconUnlink,
 } from '../Icons';
 import { FieldEditorDialog } from './FieldEditorDialog';
+import { FieldPeekDialog, shortLabel } from './FieldPeek';
 import { FieldSpanMenu } from './FieldSpanMenu';
 
 interface UsageRow extends FieldUsage {
@@ -49,6 +49,7 @@ export function SyncPanel() {
 
   const [usages, setUsages] = useState<UsageRow[] | null>(null);
   const [editing, setEditing] = useState<SyncField | null>(null);
+  const [peeking, setPeeking] = useState<SyncField | null>(null);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
@@ -85,7 +86,8 @@ export function SyncPanel() {
     if (state.selection.length !== 1) return null;
     for (const p of state.pages) {
       const b = p.blocks.find((x) => x.id === state.selection[0]);
-      if (b) return { block: b, pageId: p.id };
+      // Shapes are decoration and have no sync surface at all.
+      if (b) return b.type === 'shape' ? null : { block: b, pageId: p.id };
     }
     return null;
   })();
@@ -157,11 +159,17 @@ export function SyncPanel() {
   /** One compact field row. */
   const FieldRow = ({ f, depth }: { f: SyncField; depth: number }) => {
     const n = usageCount(f.id);
-    const preview = plainText(valueAsRich(f.value));
+    // A short label only — the pen opens the full value.
     return (
-      <div className="fp-row" style={{ paddingLeft: 6 + depth * 11 }} title={preview}>
+      <div className="fp-row" style={{ paddingLeft: 6 + depth * 11 }} title={shortLabel(f.value)}>
         <span className={`fp-dot ${f.scope === 'global' ? 'is-global' : ''}`} />
-        <span className="fp-name">{f.name}</span>
+        <button
+          className="fp-name fp-name-btn"
+          onClick={() => setPeeking(f)}
+          title="Show the full value and actions"
+        >
+          {f.name}
+        </button>
         <span className="fp-shape">{fieldShapeLabel(f.value)}</span>
         {n > 0 && (
           <span className="fp-count" title={`${n} embed(s) in this document`}>
@@ -326,6 +334,21 @@ export function SyncPanel() {
             );
           })}
         </div>
+      )}
+
+      {peeking && (
+        <FieldPeekDialog
+          field={peeking}
+          onClose={() => setPeeking(null)}
+          actions={{
+            availability:
+              peeking.scope === 'global' ? 'every project in the space' : project.title,
+            onEdit: () => setEditing(peeking),
+            onMove: readOnly ? undefined : () => void moveField(peeking),
+            onToggleScope: readOnly ? undefined : () => void toggleScope(peeking),
+            onDelete: readOnly ? undefined : () => void removeField(peeking),
+          }}
+        />
       )}
 
       {editing && (
