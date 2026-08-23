@@ -25,6 +25,23 @@ const Ctx = createContext<AuthCtx>({
   signOut: async () => {},
 });
 
+/* Special local test account: "admin" / "admin". Supabase requires an
+   email-shaped login and a 6+ char password, so the pair maps to fixed
+   internal credentials and is auto-provisioned on first sign-in. It
+   behaves like any other account everywhere else. */
+const TEST_ACCOUNT = {
+  email: 'admin@rmit-dispatch.local',
+  password: 'admin!rmit-dispatch',
+  displayName: 'Admin',
+};
+
+function resolveCredentials(email: string, password: string) {
+  const isTest = email.trim().toLowerCase() === 'admin' && password === 'admin';
+  return isTest
+    ? { email: TEST_ACCOUNT.email, password: TEST_ACCOUNT.password, isTest: true }
+    : { email, password, isTest: false };
+}
+
 async function toAppUser(uid: string, email: string): Promise<AppUser> {
   const { data } = await supabase
     .from('profiles')
@@ -75,15 +92,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return error ? error.message : null;
+    const creds = resolveCredentials(email, password);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: creds.email,
+      password: creds.password,
+    });
+    if (!error) return null;
+    // First use of the admin/admin test account: provision it, then retry.
+    if (creds.isTest) {
+      const { error: upErr } = await supabase.auth.signUp({
+        email: creds.email,
+        password: creds.password,
+        options: { data: { display_name: TEST_ACCOUNT.displayName } },
+      });
+      if (upErr) return upErr.message;
+      const { error: retryErr } = await supabase.auth.signInWithPassword({
+        email: creds.email,
+        password: creds.password,
+      });
+      return retryErr ? retryErr.message : null;
+    }
+    return error.message;
   }, []);
 
   const signUp = useCallback(async (email: string, password: string, displayName: string) => {
+    const creds = resolveCredentials(email, password);
     const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { display_name: displayName } },
+      email: creds.email,
+      password: creds.password,
+      options: {
+        data: { display_name: creds.isTest ? TEST_ACCOUNT.displayName : displayName },
+      },
     });
     return error ? error.message : null;
   }, []);

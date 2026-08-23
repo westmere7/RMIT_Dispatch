@@ -1,6 +1,7 @@
-import { forwardRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { forwardRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import type { InlineEditorHandle } from '../components/editor/InlineTextEditor';
 import { canvasAspect, effectiveColumns, marginFractions, pageDimsMm } from '../grid/presets';
-import type { GridConfig, Page } from '../types';
+import type { GridConfig, Page, RichText } from '../types';
 import { BlockFrame, type SpanClickInfo } from './BlockFrame';
 import type { ResizeCorner } from './useDragResize';
 
@@ -15,9 +16,15 @@ export const PageSurface = forwardRef<HTMLDivElement, {
   widthPx: number;
   editMode: boolean;
   selection: string[];
+  editingBlockId?: string | null;
+  inlineEditorRef?: React.RefObject<InlineEditorHandle>;
   onBlockPointerDown: (e: ReactPointerEvent, blockId: string) => void;
   onHandlePointerDown: (e: ReactPointerEvent, blockId: string, corner: ResizeCorner) => void;
   onSpanClick?: (info: SpanClickInfo) => void;
+  onStartEdit?: (blockId: string) => void;
+  onBodyChange?: (blockId: string, body: RichText) => void;
+  onBlockContextMenu?: (e: ReactMouseEvent, blockId: string, fieldId: string | null) => void;
+  onSurfaceContextMenu?: (e: ReactMouseEvent) => void;
   onBackgroundPointerDown?: () => void;
 }>(function PageSurface(
   {
@@ -26,9 +33,15 @@ export const PageSurface = forwardRef<HTMLDivElement, {
     widthPx,
     editMode,
     selection,
+    editingBlockId,
+    inlineEditorRef,
     onBlockPointerDown,
     onHandlePointerDown,
     onSpanClick,
+    onStartEdit,
+    onBodyChange,
+    onBlockContextMenu,
+    onSurfaceContextMenu,
     onBackgroundPointerDown,
   },
   ref,
@@ -50,6 +63,11 @@ export const PageSurface = forwardRef<HTMLDivElement, {
       style={{ width: widthPx, aspectRatio: `${aspect}`, fontSize: Math.max(8, widthPx / 46) }}
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onBackgroundPointerDown?.();
+      }}
+      onContextMenu={(e) => {
+        if (!onSurfaceContextMenu) return;
+        e.preventDefault();
+        onSurfaceContextMenu(e);
       }}
     >
       {editMode && (
@@ -102,9 +120,14 @@ export const PageSurface = forwardRef<HTMLDivElement, {
           rows={rows}
           selected={selection.includes(block.id)}
           editable={editMode}
+          editing={editingBlockId === block.id}
+          editorRef={editingBlockId === block.id ? inlineEditorRef : undefined}
           onPointerDown={onBlockPointerDown}
           onHandlePointerDown={onHandlePointerDown}
           onSpanClick={onSpanClick}
+          onStartEdit={onStartEdit}
+          onBodyChange={onBodyChange}
+          onContextMenu={onBlockContextMenu}
         />
       ))}
     </div>

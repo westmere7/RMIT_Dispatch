@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useEditor } from '../../editor/EditorProvider';
-import { useWorkspace } from '../../pages/Workspace';
+import { useWorkspace } from '../../editor/workspaceContext';
 import { useAuth } from '../../store/auth';
 import { addComment, deleteComment, setCommentResolved } from '../../store/comments';
 import { IconCheck, IconTrash } from '../Icons';

@@ -3,7 +3,7 @@ import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { useCrumbs } from '../components/AppShell';
 import { GridPreview } from '../components/GridPreview';
 import { IconPlus } from '../components/Icons';
-import { NewProjectPanel } from '../components/NewProjectPanel';
+import { ProjectPanel } from '../components/ProjectPanel';
 import { useAuth } from '../store/auth';
 import { fetchDocumentsForProjects } from '../store/documents';
 import { fetchFirstPages } from '../store/drafts';
@@ -197,7 +197,12 @@ export function Projects() {
       )}
 
       {showNew && (
-        <NewProjectPanel onCreate={(a) => void handleCreate(a)} onClose={() => setShowNew(false)} busy={busy} />
+        <ProjectPanel
+          mode="create"
+          onSubmit={(a) => void handleCreate(a)}
+          onClose={() => setShowNew(false)}
+          busy={busy}
+        />
       )}
     </div>
   );

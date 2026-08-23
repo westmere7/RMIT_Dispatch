@@ -125,6 +125,8 @@ export function useDragResize(surfaceRef: RefObject<HTMLElement>) {
       const page = pageRef.current;
       if (!page) return;
       if (e.button !== 0) return;
+      // A block being text-edited belongs to the caret, not the gesture.
+      if (stateRef.current.editingBlockId === blockId) return;
 
       // Selection happens on pointerdown; shift-click toggles.
       let selection = stateRef.current.selection;

@@ -1,26 +1,34 @@
 import { useEffect, useState } from 'react';
 import { useEditor } from '../../editor/EditorProvider';
 import { applySyncDown } from '../../lib/syncfields';
-import { useWorkspace } from '../../pages/Workspace';
+import { useWorkspace } from '../../editor/workspaceContext';
 import { fetchVersions } from '../../store/versions';
 import type { Version } from '../../types';
+import { useDialog } from '../Dialog';
 import { IconHistory } from '../Icons';
 
 export function VersionPanel() {
   const { doc, fieldMap, masterBlocks, isLockHolder, versionsKey } = useWorkspace();
   const { dispatch } = useEditor();
+  const dialog = useDialog();
   const [versions, setVersions] = useState<Version[] | null>(null);
 
   useEffect(() => {
     void fetchVersions(doc.id).then(setVersions);
   }, [doc.id, doc.versionCount, versionsKey]);
 
-  const restore = (v: Version) => {
+  const restore = async (v: Version) => {
     if (!isLockHolder) {
-      alert('Take the lock (Edit) before restoring a version.');
+      await dialog.alert('Take the lock first', {
+        message: 'Press Edit to take the document lock before restoring a version.',
+      });
       return;
     }
-    if (!confirm(`Restore version ${v.number} into the working draft?`)) return;
+    const ok = await dialog.confirm(`Restore version ${v.number}?`, {
+      message: 'Its snapshot replaces the current working draft. Bindings restore too.',
+      confirmLabel: 'Restore',
+    });
+    if (!ok) return;
     // Bindings restore too; embeds re-resolve against current field values.
     const pages = applySyncDown(v.snapshot.pages, fieldMap, masterBlocks ?? undefined);
     dispatch({ type: 'RESTORE_PAGES', pages });
@@ -57,7 +65,11 @@ export function VersionPanel() {
               {v.createdByName || 'Unknown'} · {new Date(v.createdAt).toLocaleString()} ·{' '}
               {v.snapshot.pages.length} page{v.snapshot.pages.length === 1 ? '' : 's'}
             </span>
-            <button className="btn btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => restore(v)}>
+            <button
+              className="btn btn-sm"
+              style={{ alignSelf: 'flex-start' }}
+              onClick={() => void restore(v)}
+            >
               Restore
             </button>
           </div>

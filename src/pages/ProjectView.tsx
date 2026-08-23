@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useCrumbs } from '../components/AppShell';
 import { GridPreview } from '../components/GridPreview';
-import { IconLock, IconPlus, IconTrash } from '../components/Icons';
+import { IconLock, IconPlus, IconSettings, IconTrash } from '../components/Icons';
 import { NewAdaptationPanel } from '../components/NewAdaptationPanel';
+import { ProjectPanel, type ProjectPanelValues } from '../components/ProjectPanel';
+import { useDialog } from '../components/Dialog';
 import { effectiveColumns } from '../grid/presets';
-import { clampPos } from '../lib/blocks';
+import { clampPos, rescalePages } from '../lib/blocks';
 import { newId } from '../lib/ids';
 import { cloneForAdaptation, collectUpstream, collectUsages, stripAllBindings, toFieldMap } from '../lib/syncfields';
 import { useAuth } from '../store/auth';
@@ -17,7 +19,7 @@ import {
 } from '../store/documents';
 import { fetchDraft, saveDraft } from '../store/drafts';
 import { fetchFields } from '../store/fields';
-import { fetchProject } from '../store/projects';
+import { fetchProject, updateProjectMeta } from '../store/projects';
 import { useSpaces } from '../store/spaces';
 import type { DispatchDocument, GridConfig, Page, Project, SyncField } from '../types';
 
@@ -36,12 +38,14 @@ export function ProjectView() {
   const { canEdit } = useSpaces();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const dialog = useDialog();
 
   const [project, setProject] = useState<Project | null>(null);
   const [rows, setRows] = useState<DocRow[]>([]);
   const [fields, setFields] = useState<SyncField[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
 
@@ -123,11 +127,40 @@ export function ProjectView() {
     }
   };
 
+  /**
+   * Save project settings. A refined grid rescales the master's blocks so
+   * the layout keeps its proportions instead of bunching up top-left.
+   */
+  const saveSettings = async (values: ProjectPanelValues) => {
+    if (!master || !user || !projectId) return;
+    setBusy(true);
+    try {
+      await updateProjectMeta(projectId, { title: values.title, type: values.type });
+      const oldGrid = master.doc.grid;
+      const gridChanged = JSON.stringify(oldGrid) !== JSON.stringify(values.grid);
+      if (gridChanged) {
+        await updateDocumentMeta(master.doc.id, { title: values.title, grid: values.grid });
+        const draft = await fetchDraft(master.doc.id);
+        if (draft) {
+          await saveDraft(master.doc.id, rescalePages(draft.pages, oldGrid, values.grid), user.uid);
+        }
+      } else if (values.title !== master.doc.title) {
+        await updateDocumentMeta(master.doc.id, { title: values.title });
+      }
+      setShowSettings(false);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const deleteMaster = async () => {
     if (!master || !user) return;
-    const ok = confirm(
-      `Delete the master "${master.doc.title}"?\n\nAll ${adaptations.length} adaptation(s) will be unlinked and keep plain copies of their content.`,
-    );
+    const ok = await dialog.confirm(`Delete master “${master.doc.title}”?`, {
+      message: `All ${adaptations.length} adaptation(s) will be unlinked and keep plain copies of their content. This cannot be undone.`,
+      confirmLabel: 'Delete master',
+      danger: true,
+    });
     if (!ok) return;
     setBusy(true);
     try {
@@ -144,7 +177,12 @@ export function ProjectView() {
   };
 
   const deleteAdaptation = async (row: DocRow) => {
-    if (!confirm(`Delete adaptation "${row.doc.title}"? This cannot be undone.`)) return;
+    const ok = await dialog.confirm(`Delete adaptation “${row.doc.title}”?`, {
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     await deleteDocument(row.doc.id);
     await load();
   };
@@ -248,9 +286,14 @@ export function ProjectView() {
           ))}
         </div>
         {canEdit && master && (
-          <button className="btn btn-primary" onClick={() => setShowNew(true)} disabled={busy}>
-            <IconPlus size={15} /> New adaptation
-          </button>
+          <>
+            <button className="btn" onClick={() => setShowSettings(true)} disabled={busy}>
+              <IconSettings size={15} /> Project settings
+            </button>
+            <button className="btn btn-primary" onClick={() => setShowNew(true)} disabled={busy}>
+              <IconPlus size={15} /> New adaptation
+            </button>
+          </>
         )}
       </div>
 
@@ -271,6 +314,16 @@ export function ProjectView() {
         )}
         {!master && <p className="muted">This project has no master document.</p>}
       </div>
+
+      {showSettings && master && (
+        <ProjectPanel
+          mode="edit"
+          initial={{ title: project.title, type: project.type, grid: master.doc.grid }}
+          onSubmit={(v) => void saveSettings(v)}
+          onClose={() => setShowSettings(false)}
+          busy={busy}
+        />
+      )}
 
       {showNew && master && (
         <NewAdaptationPanel

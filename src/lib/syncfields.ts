@@ -17,13 +17,49 @@ export function toFieldMap(fields: SyncField[]): FieldMap {
 }
 
 export function valueAsRich(value: FieldValue): RichText {
-  return value.kind === 'richtext' ? value.rich : [[{ text: value.text }]];
+  if (value.kind === 'richtext') return value.rich;
+  if (value.kind === 'scalar') return [[{ text: value.text }]];
+  // A table flattened for preview purposes only.
+  return value.rows.map((row) => row.flatMap((cell, i) => (i ? [{ text: ' · ' }, ...cell.flat()] : cell.flat())));
+}
+
+/** Table payload of a field, or null when it isn't a table field. */
+export function valueAsTable(value: FieldValue): { headerRow: boolean; rows: RichText[][] } | null {
+  return value.kind === 'table' ? { headerRow: value.headerRow, rows: value.rows } : null;
 }
 
 /* ============================================================
    Resolution — a field's value may itself contain field spans
    (nested fields). Resolve inner fields first; cycles guard.
    ============================================================ */
+
+/**
+ * Collect the local direction of every nested span, keyed by fieldId.
+ * Direction is a property of the EMBED (this document's instance), not of
+ * the field's canonical value — so when we refresh content from the field
+ * we must not let the stored value dictate local directions.
+ */
+function localDirections(nodes: InlineNode[], out = new Map<string, SyncDirection>()): Map<string, SyncDirection> {
+  for (const n of nodes) {
+    if (!isFieldSpan(n)) continue;
+    if (n.direction) out.set(n.fieldId, n.direction);
+    localDirections(n.children, out);
+  }
+  return out;
+}
+
+/** Re-apply remembered local directions onto refreshed content. */
+function restoreDirections(nodes: InlineNode[], dirs: Map<string, SyncDirection>): InlineNode[] {
+  return nodes.map((n) => {
+    if (!isFieldSpan(n)) return n;
+    const dir = dirs.get(n.fieldId);
+    return {
+      ...n,
+      ...(dir ? { direction: dir } : {}),
+      children: restoreDirections(n.children, dirs),
+    };
+  });
+}
 
 /** Refresh every FieldSpan in a node list from the field map (recursive). */
 export function refreshNodes(nodes: InlineNode[], fields: FieldMap, seen: Set<string>): InlineNode[] {
@@ -36,9 +72,9 @@ export function refreshNodes(nodes: InlineNode[], fields: FieldMap, seen: Set<st
       let children = refreshNodes(n.children, fields, seen);
       if (dir !== 'up') {
         const resolved = resolveFieldInline(n.fieldId, fields, seen);
-        if (resolved) children = resolved;
+        if (resolved) children = restoreDirections(resolved, localDirections(n.children));
       }
-      return { ...n, children };
+      return { ...n, direction: dir, children };
     }),
   );
 }
@@ -151,8 +187,20 @@ export function applySyncDown(
       // 1) Whole-block binding.
       if (b.binding && b.binding.direction !== 'up') {
         if (b.binding.fieldId) {
-          const rich = resolveFieldRich(b.binding.fieldId, fields);
-          if (rich && b.type === 'text') b = { ...b, body: rich };
+          const field = fields.get(b.binding.fieldId);
+          const table = field ? valueAsTable(field.value) : null;
+          if (table && b.type === 'table') {
+            b = {
+              ...b,
+              headerRow: table.headerRow,
+              rows: table.rows.map((row) =>
+                row.map((cell) => cell.map((para) => refreshNodes(para, fields, new Set()))),
+              ),
+            };
+          } else {
+            const rich = resolveFieldRich(b.binding.fieldId, fields);
+            if (rich && b.type === 'text') b = { ...b, body: rich };
+          }
         } else if (masterBlocks) {
           const src = masterBlocks.get(b.binding.sourceBlockId);
           if (src) b = copyBlockContent(b, src);
@@ -248,6 +296,22 @@ export function collectUpstream(pages: Page[], fields: FieldMap): UpstreamChange
               preview: plainText(block.body).slice(0, 80),
             });
           }
+          if (field && block.type === 'table') {
+            const table = valueAsTable(field.value);
+            const localRows = block.rows.map((row) => row.map((cell) => cloneRich(cell)));
+            const changed =
+              !table ||
+              table.headerRow !== block.headerRow ||
+              JSON.stringify(table.rows) !== JSON.stringify(localRows);
+            if (changed) {
+              fieldChanges.set(field.id, {
+                fieldId: field.id,
+                fieldName: field.name,
+                value: { kind: 'table', headerRow: block.headerRow, rows: localRows },
+                preview: localRows[0]?.map((c) => plainText(c)).join(' · ').slice(0, 80) ?? '',
+              });
+            }
+          }
         } else {
           blockChanges.push({ sourceBlockId: block.binding.sourceBlockId, content: block });
         }
@@ -334,8 +398,19 @@ export function collectUsages(pages: Page[]): FieldUsage[] {
   return out;
 }
 
-/** Deep-clone master pages for a new adaptation: every block gets a
-    fresh id and a `down` binding to its master source. */
+/** Force every inline field span in a node list to follow the field. */
+function forceSpansDown(nodes: InlineNode[]): InlineNode[] {
+  return nodes.map((n) =>
+    isFieldSpan(n) ? { ...n, direction: 'down' as SyncDirection, children: forceSpansDown(n.children) } : n,
+  );
+}
+
+/**
+ * Deep-clone master pages for a new adaptation: every block gets a fresh
+ * id and a `down` binding to its master source, and every embed inside it
+ * (inline spans, table cells) also starts as `down` — so a fresh
+ * adaptation is exactly the master and follows it live by default.
+ */
 export function cloneForAdaptation(masterPages: Page[], newBlockId: () => string, newPageId: () => string): Page[] {
   return masterPages.map((page) => ({
     ...page,
@@ -345,6 +420,11 @@ export function cloneForAdaptation(masterPages: Page[], newBlockId: () => string
       const sourceId = block.id;
       copy.id = newBlockId();
       copy.binding = { sourceBlockId: sourceId, direction: 'down' };
+      if (copy.type === 'text') copy.body = copy.body.map(forceSpansDown);
+      if (copy.type === 'table') {
+        copy.rows = copy.rows.map((row) => row.map((cell) => cell.map(forceSpansDown)));
+        copy.cellBindings = copy.cellBindings?.map((cb) => ({ ...cb, direction: 'down' }));
+      }
       return copy;
     }),
   }));
@@ -368,6 +448,55 @@ export function stripAllBindings(pages: Page[]): Page[] {
       return b;
     }),
   }));
+}
+
+/* ---------- Locating a span inside a block ---------- */
+
+export interface SpanLocation {
+  kind: 'body' | 'cell';
+  row?: number;
+  col?: number;
+  para: number;
+  path: number[];
+  direction: SyncDirection;
+}
+
+/**
+ * Find where a field is embedded inside one block. Returns the first
+ * occurrence — a field appears at most once per block in practice, and
+ * callers only need a handle to operate on it.
+ */
+export function locateSpan(block: Block, fieldId: string): SpanLocation | null {
+  let found: SpanLocation | null = null;
+  const search = (rich: RichText, kind: 'body' | 'cell', row?: number, col?: number) => {
+    forEachSpanRef(rich, (ref) => {
+      if (!found && ref.fieldId === fieldId) {
+        found = { kind, row, col, para: ref.para, path: ref.path, direction: ref.direction };
+      }
+    });
+  };
+  if (block.type === 'text') search(block.body, 'body');
+  if (block.type === 'table') {
+    block.rows.forEach((row, r) => row.forEach((cell, c) => search(cell, 'cell', r, c)));
+  }
+  return found;
+}
+
+function forEachSpanRef(
+  rich: RichText,
+  cb: (ref: { fieldId: string; direction: SyncDirection; para: number; path: number[] }) => void,
+): void {
+  rich.forEach((para, pi) => {
+    const walk = (nodes: InlineNode[], path: number[]) => {
+      nodes.forEach((n, i) => {
+        if (isFieldSpan(n)) {
+          cb({ fieldId: n.fieldId, direction: n.direction ?? 'down', para: pi, path: [...path, i] });
+          walk(n.children, [...path, i]);
+        }
+      });
+    };
+    walk(para, []);
+  });
 }
 
 /** Auto-name a field from its content ("intro-paragraph" style). */

@@ -4,12 +4,13 @@ import { useEditor } from '../../editor/EditorProvider';
 import { uuid } from '../../lib/ids';
 import { plainText } from '../../lib/richtext';
 import { collectUsages, valueAsRich, type FieldUsage } from '../../lib/syncfields';
-import { useWorkspace } from '../../pages/Workspace';
+import { useWorkspace } from '../../editor/workspaceContext';
 import { useAuth } from '../../store/auth';
 import { fetchDocuments } from '../../store/documents';
 import { fetchDraft } from '../../store/drafts';
 import { createField, deleteField, renameField } from '../../store/fields';
 import type { Block, SyncDirection, SyncField } from '../../types';
+import { useDialog } from '../Dialog';
 import { IconLink, IconPencil, IconTrash, IconUnlink } from '../Icons';
 import { FieldSpanMenu } from './FieldSpanMenu';
 
@@ -22,6 +23,7 @@ export function SyncPanel() {
   const { doc, project, fields, setFields, activeSpan } = useWorkspace();
   const { state, dispatch, readOnly } = useEditor();
   const navigate = useNavigate();
+  const dialog = useDialog();
   const [usages, setUsages] = useState<UsageRow[] | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -106,11 +108,12 @@ export function SyncPanel() {
                 setRenaming(null);
               }}
               onDelete={async () => {
-                if (
-                  confirm(
-                    `Delete field "${f.name}"? Embeds keep their current text but stop syncing.`,
-                  )
-                ) {
+                const ok = await dialog.confirm(`Delete field “${f.name}”?`, {
+                  message: 'Embeds keep their current text but stop syncing.',
+                  confirmLabel: 'Delete field',
+                  danger: true,
+                });
+                if (ok) {
                   await deleteField(f.id);
                   setFields((prev) => prev.filter((x) => x.id !== f.id));
                 }

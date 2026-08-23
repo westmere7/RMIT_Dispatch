@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { GRID_PRESETS, PAGE_SIZES } from '../grid/presets';
+import { GRID_PRESETS, MAX_COLUMNS, MIN_COLUMNS, PAGE_SIZES, deriveRows, makeGrid } from '../grid/presets';
 import type { DispatchDocument, GridConfig, Orientation, PageSize } from '../types';
 import { GridPreview } from './GridPreview';
 import { IconX } from './Icons';
@@ -19,25 +19,20 @@ export function NewAdaptationPanel({
   const [title, setTitle] = useState('');
   const [pageSize, setPageSize] = useState<PageSize>(master.grid.pageSize);
   const [orientation, setOrientation] = useState<Orientation>(master.grid.orientation);
-  const [presetKey, setPresetKey] = useState(() => {
-    const found = GRID_PRESETS.find(
-      (p) => p.columns === master.grid.columns && p.rows === master.grid.rows,
-    );
-    return found?.key ?? 'custom';
-  });
-  const [customCols, setCustomCols] = useState(master.grid.columns);
-  const [customRows, setCustomRows] = useState(master.grid.rows);
+  const [columns, setColumns] = useState(master.grid.columns);
 
-  const grid: GridConfig = useMemo(() => {
-    const preset = GRID_PRESETS.find((p) => p.key === presetKey);
-    return {
-      ...master.grid,
-      pageSize,
-      orientation,
-      columns: preset ? preset.columns : Math.max(2, Math.min(48, customCols)),
-      rows: preset ? preset.rows : Math.max(2, Math.min(64, customRows)),
-    };
-  }, [master.grid, pageSize, orientation, presetKey, customCols, customRows]);
+  const grid: GridConfig = useMemo(
+    () =>
+      makeGrid({
+        pageSize,
+        orientation,
+        columns,
+        marginMm: master.grid.marginMm,
+        gutterMm: master.grid.gutterMm,
+        spineMm: master.grid.spineMm,
+      }),
+    [master.grid, pageSize, orientation, columns],
+  );
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -97,53 +92,42 @@ export function NewAdaptationPanel({
               </div>
             </div>
             <div className="field">
-              <label>Grid</label>
+              <label>Grid granularity</label>
               <div className="segmented" style={{ flexWrap: 'wrap' }}>
                 {GRID_PRESETS.map((p) => (
                   <button
                     key={p.key}
                     type="button"
-                    className={presetKey === p.key ? 'active' : ''}
-                    onClick={() => setPresetKey(p.key)}
+                    className={columns === p.columns ? 'active' : ''}
+                    onClick={() => setColumns(p.columns)}
                   >
-                    {p.label}
+                    {p.name} {p.columns}×{deriveRows({ pageSize, orientation }, p.columns)}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  className={presetKey === 'custom' ? 'active' : ''}
-                  onClick={() => setPresetKey('custom')}
-                >
-                  Custom
-                </button>
               </div>
             </div>
-            {presetKey === 'custom' && (
-              <div style={{ display: 'flex', gap: 10 }}>
-                <div className="field" style={{ flex: 1 }}>
-                  <label>Columns</label>
-                  <input
-                    className="input"
-                    type="number"
-                    min={2}
-                    max={48}
-                    value={customCols}
-                    onChange={(e) => setCustomCols(Number(e.target.value))}
-                  />
-                </div>
-                <div className="field" style={{ flex: 1 }}>
-                  <label>Rows</label>
-                  <input
-                    className="input"
-                    type="number"
-                    min={2}
-                    max={64}
-                    value={customRows}
-                    onChange={(e) => setCustomRows(Number(e.target.value))}
-                  />
-                </div>
+            <div className="field">
+              <label htmlFor="na-cols">Custom columns</label>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <input
+                  id="na-cols"
+                  className="input"
+                  style={{ width: 90 }}
+                  type="number"
+                  min={MIN_COLUMNS}
+                  max={MAX_COLUMNS}
+                  value={columns}
+                  onChange={(e) =>
+                    setColumns(
+                      Math.max(MIN_COLUMNS, Math.min(MAX_COLUMNS, Number(e.target.value) || MIN_COLUMNS)),
+                    )
+                  }
+                />
+                <span className="muted text-xs">
+                  → {grid.columns}×{grid.rows} square cells
+                </span>
               </div>
-            )}
+            </div>
           </div>
 
           <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: 10 }}>

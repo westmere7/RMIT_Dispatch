@@ -42,11 +42,12 @@ const DEFAULT_SIZES: Record<BlockType, { w: number; h: number }> = {
 export function createBlock(type: BlockType, page: Page, grid: GridConfig): Block {
   const cols = effectiveColumns(grid, page.kind);
   const rows = grid.rows;
-  // Scale default size to the grid granularity (defaults tuned for 12×16).
-  const scale = Math.max(0.5, Math.min(2, cols / 12));
+  // Defaults are tuned for a 12-column page; cells are square, so the same
+  // scale applies to both axes at any granularity.
+  const scale = grid.columns / 12;
   const base = DEFAULT_SIZES[type];
-  const w = Math.max(2, Math.round(base.w * scale));
-  const h = Math.max(2, Math.round(base.h * (rows / 16)));
+  const w = Math.max(2, Math.min(cols, Math.round(base.w * scale)));
+  const h = Math.max(2, Math.min(rows, Math.round(base.h * scale)));
   const pos = findFreeSlot(page, cols, rows, w, h);
   const id = newId('blk');
 
@@ -67,6 +68,36 @@ export function createBlock(type: BlockType, page: Page, grid: GridConfig): Bloc
     case 'image':
       return { id, type, pos, fit: 'cover' };
   }
+}
+
+/**
+ * Re-map every block onto a new grid, preserving relative position and
+ * size. Used when a project's grid granularity is refined so the layout
+ * stays put instead of collapsing into the top-left.
+ */
+export function rescalePages(pages: Page[], oldGrid: GridConfig, newGrid: GridConfig): Page[] {
+  return pages.map((page) => {
+    const oldCols = effectiveColumns(oldGrid, page.kind);
+    const newCols = effectiveColumns(newGrid, page.kind);
+    const fx = newCols / oldCols;
+    const fy = newGrid.rows / oldGrid.rows;
+    return {
+      ...page,
+      blocks: page.blocks.map((b) => ({
+        ...b,
+        pos: clampPos(
+          {
+            col: Math.round(b.pos.col * fx),
+            row: Math.round(b.pos.row * fy),
+            w: Math.max(1, Math.round(b.pos.w * fx)),
+            h: Math.max(1, Math.round(b.pos.h * fy)),
+          },
+          newCols,
+          newGrid.rows,
+        ),
+      })),
+    };
+  });
 }
 
 /** Duplicate a block with a fresh id, nudged one cell (clamped). */

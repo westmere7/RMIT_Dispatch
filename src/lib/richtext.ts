@@ -1,11 +1,4 @@
-import type {
-  FieldSpan,
-  InlineNode,
-  Paragraph,
-  RichText,
-  SyncDirection,
-  TextNode,
-} from '../types';
+import type { FieldSpan, InlineNode, RichText, SyncDirection, TextNode } from '../types';
 import { isFieldSpan } from '../types';
 
 /* ============================================================

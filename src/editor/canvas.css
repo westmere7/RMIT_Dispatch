@@ -179,6 +179,9 @@
   overflow: hidden;
   word-break: break-word;
 }
+.block-content.size-xs {
+  font-size: 0.65em;
+}
 .block-content.size-sm {
   font-size: 0.8em;
 }
@@ -412,13 +415,102 @@
   padding: 4px 8px;
 }
 
+/* ---------- On-canvas text editing ---------- */
+.block-frame.editing {
+  outline: 1.5px solid var(--primary);
+  cursor: text;
+  z-index: 8;
+  background: var(--surface);
+}
+.inline-editor {
+  cursor: text;
+}
+.inline-editor-body {
+  outline: none;
+  min-height: 1em;
+}
+.inline-editor-body p {
+  margin: 0 0 0.4em;
+}
+.inline-editor-body p:last-child {
+  margin-bottom: 0;
+}
+.inline-editor-body .field-span {
+  border-bottom: 1.5px dotted var(--accent);
+  background: var(--accent-wash);
+  border-radius: 2px;
+}
+.inline-editor-body .field-span.dir-up {
+  border-bottom-color: var(--warning);
+  background: var(--warning-wash);
+}
+.inline-editor-body .field-span.dir-two-way {
+  border-bottom-color: var(--success);
+  background: var(--success-wash);
+}
+.inline-editor-body .field-span.dir-down {
+  cursor: pointer;
+}
+
+/* "double-click to edit" affordance on a selected text block */
+.edit-hint {
+  position: absolute;
+  bottom: -19px;
+  right: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* Floating format bar shown while editing text on the canvas */
+.canvas-format-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.canvas-format-bar .bar-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 4px;
+}
+.canvas-format-bar .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
 /* Zoom controls */
+.zoom-dock {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+  padding: 2px;
+  z-index: 10;
+}
 .zoom-controls {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   margin-left: auto;
 }
+.zoom-label,
 .zoom-controls .zoom-label {
   min-width: 44px;
   text-align: center;

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useCrumbs } from '../components/AppShell';
 import { RoleBadge } from '../components/RoleBadge';
+import { useDialog } from '../components/Dialog';
 import { useAuth } from '../store/auth';
 import {
   addMember,
@@ -18,6 +19,7 @@ export function SpaceSettings() {
   const { setCrumbs } = useCrumbs();
   const { currentSpace, isAdmin, refresh } = useSpaces();
   const { user } = useAuth();
+  const dialog = useDialog();
   const [members, setMembers] = useState<SpaceMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -178,7 +180,15 @@ export function SpaceSettings() {
                     <button
                       className="btn btn-danger btn-sm"
                       onClick={async () => {
-                        if (confirm(`Remove ${m.displayName || m.email} from this space?`)) {
+                        const ok = await dialog.confirm(
+                          `Remove ${m.displayName || m.email}?`,
+                          {
+                            message: 'They lose access to every project in this space.',
+                            confirmLabel: 'Remove',
+                            danger: true,
+                          },
+                        );
+                        if (ok) {
                           await removeMember(m.spaceId, m.userId);
                           await load();
                         }

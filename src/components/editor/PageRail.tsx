@@ -1,9 +1,11 @@
 import { useEditor } from '../../editor/EditorProvider';
+import { useDialog } from '../Dialog';
 import { GridPreview } from '../GridPreview';
 import { IconPlus, IconTrash } from '../Icons';
 
 export function PageRail() {
   const { state, dispatch, readOnly } = useEditor();
+  const dialog = useDialog();
 
   return (
     <div className="side-panel left">
@@ -50,11 +52,14 @@ export function PageRail() {
                         tabIndex={0}
                         title="Delete page"
                         style={{ cursor: 'pointer', padding: '0 3px' }}
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          if (confirm(`Delete page ${i + 1} and its ${page.blocks.length} block(s)?`)) {
-                            dispatch({ type: 'DELETE_PAGE', pageId: page.id });
-                          }
+                          const ok = await dialog.confirm(`Delete page ${i + 1}?`, {
+                            message: `${page.blocks.length} block(s) on this page will be removed.`,
+                            confirmLabel: 'Delete page',
+                            danger: true,
+                          });
+                          if (ok) dispatch({ type: 'DELETE_PAGE', pageId: page.id });
                         }}
                         onKeyDown={(e) => e.key === 'Enter' && e.stopPropagation()}
                       >

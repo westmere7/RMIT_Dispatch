@@ -71,3 +71,8 @@ export async function renameProject(id: string, title: string) {
   const { error } = await supabase.from('projects').update({ title }).eq('id', id);
   if (error) throw error;
 }
+
+export async function updateProjectMeta(id: string, patch: { title?: string; type?: string }) {
+  const { error } = await supabase.from('projects').update(patch).eq('id', id);
+  if (error) throw error;
+}

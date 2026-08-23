@@ -1,19 +1,12 @@
 import { useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../editor/EditorProvider';
+import { useWorkspace, type InspectorTab } from '../../editor/workspaceContext';
 import { effectiveColumns } from '../../grid/presets';
 import { uuid } from '../../lib/ids';
-import {
-  emptyRich,
-  plainText,
-  wrapField,
-  applyMark,
-  rangeHasMark,
-  type TextRange,
-} from '../../lib/richtext';
-import { autoFieldName, valueAsRich, wouldCreateCycle } from '../../lib/syncfields';
-import { useWorkspace } from '../../pages/Workspace';
+import { emptyRich, plainText, applyMark, rangeHasMark, type TextRange } from '../../lib/richtext';
+import { autoFieldName } from '../../lib/syncfields';
 import { useAuth } from '../../store/auth';
-import { createField, updateFieldValue } from '../../store/fields';
+import { createField } from '../../store/fields';
 import { uploadMedia } from '../../store/media';
 import { useSpaces } from '../../store/spaces';
 import type {
@@ -39,12 +32,12 @@ import {
   IconSendBack,
   IconTrash,
 } from '../Icons';
+import { useDialog } from '../Dialog';
 import { CommentThread } from './CommentThread';
+import { FieldMenu } from './FieldMenu';
 import { RichTextEditor, type RichTextEditorHandle } from './RichTextEditor';
 import { SyncPanel } from './SyncPanel';
 import { VersionPanel } from './VersionPanel';
-
-export type InspectorTab = 'properties' | 'sync' | 'versions' | 'comments';
 
 const TABS: { key: InspectorTab; label: string }[] = [
   { key: 'properties', label: 'Properties' },
@@ -222,7 +215,7 @@ function SingleBlock({ block, pageId }: { block: Block; pageId: string }) {
 
 /* ---------- Text ---------- */
 
-const SIZES: TextSize[] = ['sm', 'md', 'lg', 'xl'];
+const SIZES: TextSize[] = ['xs', 'sm', 'md', 'lg', 'xl'];
 
 function TextProps({ block, update }: { block: TextBlock; update: (p: Partial<Block>) => void }) {
   const { readOnly } = useEditor();
@@ -309,12 +302,15 @@ function RichTextBody({
   locked: boolean;
 }) {
   const { setActiveSpan, setTab } = useWorkspace();
+  const dialog = useDialog();
   const setBody = (body: RichText) => update({ body });
 
   const withRange = (fn: (range: TextRange) => void) => {
     const range = editorRef.current?.getRange();
     if (!range || range.end === range.start) {
-      alert('Select some text first (within one paragraph).');
+      void dialog.alert('Nothing selected', {
+        message: 'Select some text inside one paragraph first.',
+      });
       return;
     }
     fn(range);
@@ -387,120 +383,6 @@ function RichTextBody({
         </>
       }
     />
-  );
-}
-
-/* ---------- "Make sync field" / bind menu ---------- */
-
-export function FieldMenu({
-  getRange,
-  rich,
-  onRich,
-}: {
-  getRange: () => TextRange | null;
-  rich: RichText;
-  onRich: (rich: RichText) => void;
-}) {
-  const { doc, project, fields, fieldMap, setFields } = useWorkspace();
-  const { dispatch } = useEditor();
-  const { user } = useAuth();
-  const [open, setOpen] = useState(false);
-  const isMaster = doc.kind === 'master';
-  const defaultDir: SyncDirection = isMaster ? 'two-way' : 'down';
-
-  const applyWrap = async (fieldId: string, direction: SyncDirection, createNew: boolean) => {
-    if (!user) return;
-    const range = getRange();
-    if (!range || range.end === range.start) {
-      alert('Select the text to sync first (within one paragraph).');
-      return;
-    }
-    const res = wrapField(rich, range, fieldId, direction);
-    if (!res) {
-      alert('Selection cannot cross a synced span boundary. Select inside or around it.');
-      return;
-    }
-    if (res.parentFieldId) {
-      if (!createNew && wouldCreateCycle(fieldId, res.parentFieldId, fieldMap)) {
-        alert('That binding would create a cycle between fields.');
-        return;
-      }
-    }
-
-    if (createNew) {
-      const name = autoFieldName(res.text, new Set(fields.map((f) => f.name)));
-      const field = await createField({
-        id: fieldId,
-        projectId: project.id,
-        name,
-        value: { kind: 'richtext', rich: [res.children.map((c) => ({ ...c }))] },
-        userId: user.uid,
-      });
-      setFields((prev) => [...prev.filter((f) => f.id !== field.id), field]);
-    }
-
-    // Mirror the wrap into the enclosing field's canonical value (nested
-    // fields must live inside the parent value too).
-    if (res.parentFieldId && res.parentRel) {
-      const parent = fieldMap.get(res.parentFieldId);
-      if (parent) {
-        const parentRich = valueAsRich(parent.value);
-        const wrapped = wrapField(
-          parentRich,
-          { para: 0, start: res.parentRel.start, end: res.parentRel.end },
-          fieldId,
-          'down',
-        );
-        if (wrapped) {
-          await updateFieldValue(parent.id, { kind: 'richtext', rich: wrapped.rich }, user.uid);
-          setFields((prev) =>
-            prev.map((f) =>
-              f.id === parent.id ? { ...f, value: { kind: 'richtext', rich: wrapped.rich } } : f,
-            ),
-          );
-        }
-      }
-    }
-
-    onRich(res.rich);
-    setOpen(false);
-    // Re-resolve embeds against the (possibly updated) field map.
-    dispatch({ type: 'FIELDS_CHANGED', fields: fieldMap });
-  };
-
-  return (
-    <span style={{ position: 'relative' }}>
-      <button
-        className="btn btn-sm"
-        style={{ height: 26 }}
-        title="Sync field from selection"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <IconLink size={12} /> Field
-      </button>
-      {open && (
-        <div
-          className="space-switcher-menu"
-          style={{ left: 0, right: 'auto', maxHeight: 260, overflow: 'auto', minWidth: 200 }}
-        >
-          <button className="menu-item" onClick={() => void applyWrap(uuid(), defaultDir, true)}>
-            ＋ New field from selection
-          </button>
-          {fields.length > 0 && <hr className="divider" style={{ margin: '4px 0' }} />}
-          {fields.map((f) => (
-            <button
-              key={f.id}
-              className="menu-item"
-              title={plainText(valueAsRich(f.value))}
-              onClick={() => void applyWrap(f.id, defaultDir, false)}
-            >
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </span>
   );
 }
 
@@ -765,6 +647,7 @@ function TableProps({
 function ImageProps({ block, update }: { block: ImageBlock; update: (p: Partial<Block>) => void }) {
   const { readOnly } = useEditor();
   const { currentSpace } = useSpaces();
+  const dialog = useDialog();
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -778,7 +661,9 @@ function ImageProps({ block, update }: { block: ImageBlock; update: (p: Partial<
       update({ storagePath: path } as Partial<Block>);
     } catch (e) {
       console.error(e);
-      alert('Upload failed — is the `media` bucket created?');
+      await dialog.alert('Upload failed', {
+        message: 'Check that the `media` storage bucket exists (see README setup).',
+      });
     } finally {
       setUploading(false);
     }

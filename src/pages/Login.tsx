@@ -92,14 +92,18 @@ export function Login() {
         )}
         <div className="field">
           <label htmlFor="email">Email</label>
+          {/* type=text, not email: the built-in "admin" test account is not
+              email-shaped. Supabase still validates real addresses. */}
           <input
             id="email"
             className="input"
-            type="email"
+            type="text"
+            inputMode="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
+            placeholder="you@example.com"
           />
         </div>
         <div className="field">
@@ -109,12 +113,14 @@ export function Login() {
             className="input"
             type="password"
             required
-            minLength={6}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
           />
         </div>
+        <p className="muted text-xs" style={{ marginTop: -6 }}>
+          Local testing: sign in with <strong>admin</strong> / <strong>admin</strong>.
+        </p>
 
         {error && <div className="auth-error">{error}</div>}
         {notice && (

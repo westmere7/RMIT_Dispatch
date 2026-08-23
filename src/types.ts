@@ -87,7 +87,7 @@ export interface BlockBinding {
   direction: SyncDirection;
 }
 
-export type TextSize = 'sm' | 'md' | 'lg' | 'xl';
+export type TextSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type TextAlign = 'left' | 'center' | 'right';
 
 interface BlockBase {
@@ -196,7 +196,9 @@ export interface Version {
 
 export type FieldValue =
   | { kind: 'richtext'; rich: RichText }
-  | { kind: 'scalar'; text: string };
+  | { kind: 'scalar'; text: string }
+  /** A whole table owned by the field: header flag plus every cell. */
+  | { kind: 'table'; headerRow: boolean; rows: RichText[][] };
 
 export interface SyncField {
   id: string;

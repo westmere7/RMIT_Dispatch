@@ -1,12 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useCrumbs } from '../components/AppShell';
 import {
@@ -18,18 +10,24 @@ import {
   IconType,
   IconUnlock,
 } from '../components/Icons';
-import { BlockInspector, type InspectorTab } from '../components/editor/BlockInspector';
+import { useDialog } from '../components/Dialog';
+import { BlockInspector } from '../components/editor/BlockInspector';
 import { PageRail } from '../components/editor/PageRail';
 import type { SpanClickInfo } from '../editor/BlockFrame';
 import { EditorCanvas } from '../editor/EditorCanvas';
 import { EditorProvider, useEditor } from '../editor/EditorProvider';
+import {
+  WorkspaceContext,
+  type ActiveSpan,
+  type InspectorTab,
+  type WorkspaceCtx,
+} from '../editor/workspaceContext';
 import {
   applySyncDown,
   collectUpstream,
   copyBlockContent,
   toFieldMap,
   type FieldMap,
-  type UpstreamChanges,
 } from '../lib/syncfields';
 import { useAuth } from '../store/auth';
 import { fetchComments } from '../store/comments';
@@ -59,40 +57,6 @@ import type {
   Project,
   SyncField,
 } from '../types';
-
-/* ============================================================
-   Workspace context — everything the inspector panels need.
-   ============================================================ */
-
-export interface ActiveSpan extends SpanClickInfo {}
-
-interface WorkspaceCtx {
-  doc: DispatchDocument;
-  project: Project;
-  fields: SyncField[];
-  fieldMap: FieldMap;
-  setFields: React.Dispatch<React.SetStateAction<SyncField[]>>;
-  masterDoc: DispatchDocument | null;
-  masterBlocks: Map<string, Block> | null;
-  comments: DocComment[];
-  setComments: React.Dispatch<React.SetStateAction<DocComment[]>>;
-  presence: PresenceUser[];
-  isLockHolder: boolean;
-  pendingUpstream: UpstreamChanges;
-  tab: InspectorTab;
-  setTab: (t: InspectorTab) => void;
-  activeSpan: ActiveSpan | null;
-  setActiveSpan: (s: ActiveSpan | null) => void;
-  saveNow: () => Promise<void>;
-  versionsKey: number;
-}
-
-const Ctx = createContext<WorkspaceCtx | null>(null);
-export function useWorkspace(): WorkspaceCtx {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error('useWorkspace outside Workspace');
-  return ctx;
-}
 
 /* ============================================================
    Data loading wrapper
@@ -313,6 +277,7 @@ function WorkspaceInner({
   const { canEdit } = useSpaces();
   const { setCrumbs } = useCrumbs();
   const { state, dispatch, flush } = useEditor();
+  const dialog = useDialog();
 
   const isHolderRef = useRef(isLockHolder);
   isHolderRef.current = isLockHolder;
@@ -462,11 +427,13 @@ function WorkspaceInner({
     if (!user) return;
     const ok = await acquireLock(doc.id, user.uid, user.displayName);
     if (!ok) {
-      alert('Could not take the lock — someone else is editing.');
+      await dialog.alert('Could not take the lock', {
+        message: 'Someone else is editing this document right now.',
+      });
       return;
     }
     setDoc((d) => ({ ...d, lock: { uid: user.uid, displayName: user.displayName, at: new Date().toISOString() } }));
-  }, [doc.id, user, setDoc]);
+  }, [doc.id, user, setDoc, dialog]);
 
   const stopEditing = useCallback(async () => {
     if (!user) return;
@@ -477,7 +444,12 @@ function WorkspaceInner({
 
   const finalize = useCallback(async () => {
     if (!user) return;
-    const label = prompt('Version label (optional):') ?? undefined;
+    const label = await dialog.prompt('Finalize this version', {
+      message:
+        'Writes an immutable snapshot, applies pending upstream field changes and releases the lock.',
+      confirmLabel: 'Finalize',
+    });
+    if (label === null) return; // cancelled
     await saveNow();
     try {
       await createVersion({
@@ -497,9 +469,9 @@ function WorkspaceInner({
       bumpVersions();
     } catch (e) {
       console.error(e);
-      alert('Finalize failed — see console.');
+      await dialog.alert('Finalize failed', { message: String(e) });
     }
-  }, [doc.id, doc.versionCount, user, saveNow, setDoc, bumpVersions]);
+  }, [doc.id, doc.versionCount, user, saveNow, setDoc, bumpVersions, dialog]);
 
   /* ---------- Lock status ---------- */
   const lockStale =
@@ -539,7 +511,7 @@ function WorkspaceInner({
   };
 
   return (
-    <Ctx.Provider value={ctx}>
+    <WorkspaceContext.Provider value={ctx}>
       <div className="workspace">
         <PageRail />
         <div className="workspace-center">
@@ -623,6 +595,6 @@ function WorkspaceInner({
         </div>
         <BlockInspector />
       </div>
-    </Ctx.Provider>
+    </WorkspaceContext.Provider>
   );
 }

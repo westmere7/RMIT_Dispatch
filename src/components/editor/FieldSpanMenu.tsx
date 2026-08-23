@@ -6,7 +6,7 @@ import {
   unlinkSpan,
   type SpanRef,
 } from '../../lib/richtext';
-import { useWorkspace } from '../../pages/Workspace';
+import { useWorkspace } from '../../editor/workspaceContext';
 import type { Block, RichText, SyncDirection } from '../../types';
 import { IconUnlink } from '../Icons';
 

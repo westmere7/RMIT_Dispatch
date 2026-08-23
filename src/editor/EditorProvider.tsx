@@ -28,6 +28,8 @@ export interface EditorState {
   selection: string[];
   currentPageId: string | null;
   grid: GridConfig;
+  /** Block whose text is being edited directly on the canvas. */
+  editingBlockId: string | null;
   /** Who caused the latest state: local edits schedule persistence. */
   origin: 'init' | 'local' | 'remote';
   rev: number;
@@ -42,6 +44,7 @@ export type EditorAction =
   | { type: 'SELECT'; ids: string[] }
   | { type: 'TOGGLE_SELECT'; id: string }
   | { type: 'CLEAR_SELECT' }
+  | { type: 'EDIT_TEXT'; blockId: string | null }
   | { type: 'ADD_BLOCK'; pageId: string; blockType: BlockType }
   | { type: 'UPDATE_BLOCK'; pageId: string; blockId: string; patch: Partial<Block> }
   | { type: 'REPLACE_BLOCK'; pageId: string; block: Block }
@@ -76,6 +79,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         selection: [],
         currentPageId: pages[0]?.id ?? null,
         grid: action.grid,
+        editingBlockId: null,
         origin: 'init',
         rev: 0,
       };
@@ -85,11 +89,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const pages = action.pages;
       const currentPageId =
         pages.find((p) => p.id === state.currentPageId)?.id ?? pages[0]?.id ?? null;
+      const selection = keepExistingSelection(pages, state.selection);
       return {
         ...state,
         pages,
         currentPageId,
-        selection: keepExistingSelection(pages, state.selection),
+        selection,
+        editingBlockId:
+          state.editingBlockId && selection.includes(state.editingBlockId)
+            ? state.editingBlockId
+            : null,
         origin: 'remote',
       };
     }
@@ -113,19 +122,37 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'SET_PAGE':
-      return { ...state, currentPageId: action.pageId, selection: [] };
+      return { ...state, currentPageId: action.pageId, selection: [], editingBlockId: null };
 
     case 'SELECT':
-      return { ...state, selection: action.ids };
+      return {
+        ...state,
+        selection: action.ids,
+        // Leaving a block ends its inline edit session.
+        editingBlockId:
+          state.editingBlockId && action.ids.includes(state.editingBlockId)
+            ? state.editingBlockId
+            : null,
+      };
     case 'TOGGLE_SELECT': {
       const has = state.selection.includes(action.id);
       return {
         ...state,
+        editingBlockId: null,
         selection: has ? state.selection.filter((i) => i !== action.id) : [...state.selection, action.id],
       };
     }
     case 'CLEAR_SELECT':
-      return state.selection.length ? { ...state, selection: [] } : state;
+      return state.selection.length || state.editingBlockId
+        ? { ...state, selection: [], editingBlockId: null }
+        : state;
+
+    case 'EDIT_TEXT':
+      return {
+        ...state,
+        editingBlockId: action.blockId,
+        selection: action.blockId ? [action.blockId] : state.selection,
+      };
 
     case 'ADD_BLOCK': {
       const page = state.pages.find((p) => p.id === action.pageId);
@@ -135,7 +162,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...p,
         blocks: [...p.blocks, block],
       }));
-      return local(state, pages, { selection: [block.id] });
+      return local(state, pages, { selection: [block.id], editingBlockId: null });
     }
 
     case 'UPDATE_BLOCK': {
@@ -178,6 +205,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }));
       return local(state, pages, {
         selection: state.selection.filter((id) => !ids.has(id)),
+        editingBlockId:
+          state.editingBlockId && ids.has(state.editingBlockId) ? null : state.editingBlockId,
       });
     }
 
@@ -195,7 +224,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           });
         return { ...p, blocks: [...p.blocks, ...copies] };
       });
-      return local(state, pages, { selection: newIds });
+      return local(state, pages, { selection: newIds, editingBlockId: null });
     }
 
     case 'REORDER_BLOCK': {
@@ -237,7 +266,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'ADD_PAGE': {
       const page: Page = { id: newId('pg'), index: state.pages.length, kind: action.kind, blocks: [] };
       const pages = [...state.pages, page];
-      return local(state, pages, { currentPageId: page.id, selection: [] });
+      return local(state, pages, { currentPageId: page.id, selection: [], editingBlockId: null });
     }
 
     case 'DELETE_PAGE': {
@@ -247,7 +276,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         .map((p, i) => ({ ...p, index: i }));
       const currentPageId =
         state.currentPageId === action.pageId ? (pages[0]?.id ?? null) : state.currentPageId;
-      return local(state, pages, { currentPageId, selection: [] });
+      return local(state, pages, { currentPageId, selection: [], editingBlockId: null });
     }
 
     case 'TOGGLE_PAGE_KIND': {
@@ -312,6 +341,7 @@ export function EditorProvider({
     selection: [],
     currentPageId: initialPages[0]?.id ?? null,
     grid,
+    editingBlockId: null,
     origin: 'init' as const,
     rev: 0,
   }));
