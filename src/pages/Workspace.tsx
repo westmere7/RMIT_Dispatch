@@ -31,8 +31,6 @@ import {
 } from '../editor/workspaceContext';
 import {
   buildDispatchTargets,
-  summariseDispatch,
-  versionName,
   type DispatchTarget,
 } from '../lib/dispatch';
 import { docTypeLabel } from '../lib/doctree';
@@ -659,17 +657,18 @@ function WorkspaceInner({
   }, [doc.id, doc.projectId, user]);
 
   const confirmDispatch = useCallback(
-    async ({ label, targetIds }: DispatchArgs) => {
+    async ({ label, description, targetIds }: DispatchArgs) => {
       if (!user) return;
       setDispatchBusy(true);
       // Pending up / two-way edits reach the fields here, so the dispatch
       // that follows sends the values as they now stand.
       await saveNow();
       try {
-        await createVersion({
+        const created = await createVersion({
           documentId: doc.id,
           number: doc.versionCount + 1,
           label: label || undefined,
+          description: description || undefined,
           userId: user.uid,
           userName: user.displayName,
           pages: pagesRef.current,
@@ -678,30 +677,34 @@ function WorkspaceInner({
         setDoc((d) => ({
           ...d,
           lock: null,
-          versionCount: d.versionCount + 1,
+          currentVersionId: created.id,
+          versionCount: Math.max(d.versionCount, created.number),
         }));
         bumpVersions();
-      } catch (e) {
-        console.error(e);
+      } catch (e: any) {
+        console.error('createVersion error:', e);
         setDispatchBusy(false);
-        await dialog.alert('Could not create the version', { message: String(e) });
+        const msg =
+          e?.message ||
+          e?.details ||
+          e?.hint ||
+          (typeof e === 'object' ? JSON.stringify(e) : String(e));
+        await dialog.alert('Could not create the version', { message: msg });
         return;
       }
 
       const chosen = (dispatchTargets ?? [])
         .filter((t) => targetIds.includes(t.doc.id))
         .map((t) => t.doc);
-      let summary: string | null = null;
       if (chosen.length > 0) {
         try {
-          const outcomes = await runDispatch({
+          await runDispatch({
             projectId: doc.projectId,
             spaceId: project.spaceId,
             source: { id: doc.id, pages: pagesRef.current },
             targets: chosen,
             userId: user.uid,
           });
-          summary = summariseDispatch(outcomes);
         } catch (e) {
           console.error(e);
           setDispatchBusy(false);
@@ -711,11 +714,6 @@ function WorkspaceInner({
       }
       setDispatchBusy(false);
       setDispatchOpen(false);
-      await dialog.alert(`${versionName(doc.versionCount + 1, label || null)} created`, {
-        message: summary
-          ? `Dispatched to ${chosen.length} adaptation(s): ${summary}`
-          : 'No adaptations were dispatched to.',
-      });
     },
     [
       doc.id,
@@ -916,14 +914,11 @@ function WorkspaceInner({
 
             {canEdit && isLockHolder && (
               <>
-                <button className="btn btn-sm" onClick={() => void saveNow()}>
-                  Save
-                </button>
                 <button className="btn btn-sm" onClick={() => void stopEditing()}>
                   <IconUnlock size={13} /> Stop editing
                 </button>
                 <button className="btn btn-sm btn-primary" onClick={openDispatch}>
-                  <IconDispatch size={13} /> Dispatch
+                  <IconDispatch size={13} /> Save &amp; Dispatch
                 </button>
               </>
             )}

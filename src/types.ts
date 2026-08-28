@@ -294,6 +294,7 @@ export interface Version {
   documentId: string;
   number: number;
   label?: string | null;
+  description?: string | null;
   createdBy: string;
   createdByName?: string;
   createdAt: string;

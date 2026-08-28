@@ -1440,34 +1440,28 @@ select.input {
   color: var(--warning);
 }
 
-/* Fixed-width right side so stats and actions line up across every row,
-   whatever each card is carrying. */
+.lin-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .lin-stats {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-shrink: 0;
-  justify-content: flex-end;
-  width: 190px;
 }
 
 .lin-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
+  gap: 3px;
   flex-shrink: 0;
-  width: 264px;
 }
-/* Dispatch keeps its column on every row, filled or not, so the icon
-   buttons beside it stay on one vertical line down the whole tree. */
-.lin-disp-slot {
-  display: flex;
-  justify-content: flex-end;
-  width: 94px;
-  flex-shrink: 0;
-  margin-right: 4px;
-}
+
 .lin-actions .icon-btn {
   width: 26px;
   height: 26px;

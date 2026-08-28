@@ -4,15 +4,17 @@ import { bumpVersionPointer } from './documents';
 import { foldHeadings } from '../lib/blocks';
 
 function map(r: Record<string, unknown>): Version {
+  const snap = r.snapshot as { pages?: Page[]; description?: string } | undefined;
   return {
     id: r.id as string,
     documentId: r.document_id as string,
     number: r.number as number,
     label: (r.label as string | null) ?? null,
+    description: (r.description as string | null) ?? snap?.description ?? null,
     createdBy: r.created_by as string,
     createdByName: (r.created_by_name as string) ?? '',
     createdAt: r.created_at as string,
-    snapshot: { pages: foldHeadings((r.snapshot as { pages: Page[] }).pages ?? []) },
+    snapshot: { pages: foldHeadings(snap?.pages ?? (r.snapshot as { pages: Page[] })?.pages ?? []) },
   };
 }
 
@@ -35,26 +37,48 @@ export async function fetchVersion(id: string): Promise<Version | null> {
 
 export async function createVersion(args: {
   documentId: string;
-  number: number;
+  number?: number;
   label?: string;
+  description?: string;
   userId: string;
   userName: string;
   pages: Page[];
 }): Promise<Version> {
+  // Query the highest existing version number to prevent duplicate key errors
+  let nextNumber = args.number;
+  try {
+    const { data: latest } = await supabase
+      .from('versions')
+      .select('number')
+      .eq('document_id', args.documentId)
+      .order('number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latest && typeof latest.number === 'number') {
+      nextNumber = Math.max(nextNumber ?? 1, latest.number + 1);
+    }
+  } catch (err) {
+    console.warn('Could not query latest version number', err);
+  }
+  if (!nextNumber) nextNumber = 1;
+
   const { data, error } = await supabase
     .from('versions')
     .insert({
       document_id: args.documentId,
-      number: args.number,
+      number: nextNumber,
       label: args.label ?? null,
       created_by: args.userId,
       created_by_name: args.userName,
-      snapshot: { pages: args.pages },
+      snapshot: {
+        pages: args.pages,
+        description: args.description ?? null,
+      },
     })
     .select()
     .single();
   if (error) throw error;
   const version = map(data);
-  await bumpVersionPointer(args.documentId, version.id, args.number);
+  await bumpVersionPointer(args.documentId, version.id, nextNumber);
   return version;
 }

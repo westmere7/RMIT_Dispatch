@@ -18,6 +18,8 @@ import { IconDispatch, IconLock, IconX } from './Icons';
 export interface DispatchArgs {
   /** Optional extra name for the new version. 'version' mode only. */
   label?: string;
+  /** Optional description or notes for the new version. */
+  description?: string;
   targetIds: string[];
 }
 
@@ -46,6 +48,7 @@ export function DispatchPanel({
   busy?: boolean;
 }) {
   const [label, setLabel] = useState('');
+  const [description, setDescription] = useState('');
   const [chosen, setChosen] = useState<Set<string>>(new Set());
 
   const writable = useMemo(() => targets.filter((t) => !t.blockedBy), [targets]);
@@ -73,15 +76,6 @@ export function DispatchPanel({
   // Finalising with nothing to send is legitimate — it is just a version.
   const canConfirm = mode === 'version' ? true : !nothingSelected && !loading;
 
-  const confirmLabel = () => {
-    if (busy) return 'Dispatching…';
-    if (mode === 'version') {
-      if (nothingSelected) return `Create ${versionName(nextNumber)} only`;
-      return `Dispatch ${versionName(nextNumber)} to ${chosen.size}`;
-    }
-    return nothingSelected ? 'Dispatch' : `Dispatch to ${chosen.size}`;
-  };
-
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: 560 }}>
@@ -94,27 +88,32 @@ export function DispatchPanel({
           }}
         >
           <h2 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <IconDispatch size={16} /> Dispatch
+            <IconDispatch size={16} /> {mode === 'version' ? 'Save & Dispatch' : 'Dispatch changes'}
           </h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             <IconX />
           </button>
         </div>
 
-        <p className="muted text-xs" style={{ marginBottom: 16 }}>
-          {mode === 'version' ? (
-            <>
-              Snapshots <strong>{source.title}</strong> as an immutable version, applies pending
-              upstream changes, releases the lock and pushes the shared content to the adaptations
-              you pick.
-            </>
-          ) : (
-            <>
-              Pushes <strong>{source.title}</strong>&apos;s shared content to the adaptations you
-              pick. No new version is created — this only propagates what is already there.
-            </>
-          )}
-        </p>
+        {mode === 'version' ? (
+          <div style={{ marginBottom: 16, fontSize: '12px', color: 'var(--text-muted)' }}>
+            <p style={{ marginBottom: 6, color: 'var(--text)' }}>
+              Save your latest changes to <strong>{source.title}</strong> and finish editing.
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 16, lineHeight: 1.5 }}>
+              <li>
+                <strong>Save version only:</strong> Creates a permanent version milestone (v{nextNumber}) without updating child adaptations.
+              </li>
+              <li>
+                <strong>Save &amp; Dispatch:</strong> Saves the version and immediately pushes your shared content to the chosen adaptations.
+              </li>
+            </ul>
+          </div>
+        ) : (
+          <p className="muted text-xs" style={{ marginBottom: 16 }}>
+            Pushes shared content from <strong>{source.title}</strong> to the selected adaptations below.
+          </p>
+        )}
 
         {/* ---------- The version ---------- */}
         <div className="field" style={{ marginBottom: 16 }}>
@@ -134,6 +133,21 @@ export function DispatchPanel({
                   placeholder="Optional name — Spring intake, Round 2…"
                 />
               </div>
+              <textarea
+                id="disp-desc"
+                className="input"
+                style={{
+                  marginTop: 8,
+                  minHeight: 52,
+                  resize: 'vertical',
+                  fontSize: '12px',
+                  lineHeight: '1.4',
+                  padding: '6px 10px',
+                }}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Optional description or release notes…"
+              />
               <span className="muted text-xs" style={{ marginTop: 5, display: 'block' }}>
                 Adaptations will follow <strong>{preview}</strong>
               </span>
@@ -238,10 +252,9 @@ export function DispatchPanel({
         </div>
 
         {/* ---------- Guards ---------- */}
-        {!loading && targets.length > 0 && nothingSelected && (
+        {!loading && targets.length > 0 && nothingSelected && mode !== 'version' && (
           <p className="disp-warn text-xs">
-            Pick at least one adaptation
-            {mode === 'version' ? ' — or dispatch nothing and just create the version.' : '.'}
+            Pick at least one adaptation to dispatch to.
           </p>
         )}
         {emptyChosen.length > 0 && (
@@ -259,23 +272,93 @@ export function DispatchPanel({
           </p>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-          <button className="btn" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            disabled={!canConfirm || busy}
-            onClick={() =>
-              onDispatch({
-                ...(mode === 'version' ? { label: label.trim() || undefined } : {}),
-                targetIds: targets.filter((t) => chosen.has(t.doc.id)).map((t) => t.doc.id),
-              })
-            }
+        {mode === 'version' ? (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 12,
+              marginTop: 24,
+            }}
           >
-            <IconDispatch size={13} /> {confirmLabel()}
-          </button>
-        </div>
+            <button
+              className="btn btn-ghost"
+              onClick={onClose}
+              disabled={busy}
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Cancel
+            </button>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button
+                className="btn"
+                disabled={busy}
+                title={`Save as version v${nextNumber} without updating child adaptations`}
+                style={{ fontWeight: 500 }}
+                onClick={() =>
+                  onDispatch({
+                    label: label.trim() || undefined,
+                    description: description.trim() || undefined,
+                    targetIds: [],
+                  })
+                }
+              >
+                Save version only
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={busy}
+                style={{ fontWeight: 600, paddingLeft: 18, paddingRight: 18 }}
+                onClick={() =>
+                  onDispatch({
+                    label: label.trim() || undefined,
+                    description: description.trim() || undefined,
+                    targetIds: targets.filter((t) => chosen.has(t.doc.id)).map((t) => t.doc.id),
+                  })
+                }
+              >
+                <IconDispatch size={13} />{' '}
+                {busy
+                  ? 'Saving & Dispatching…'
+                  : chosen.size > 0
+                    ? `Save & Dispatch (${chosen.size})`
+                    : 'Save & Dispatch'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 10,
+              marginTop: 24,
+            }}
+          >
+            <button
+              className="btn btn-ghost"
+              onClick={onClose}
+              disabled={busy}
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={!canConfirm || busy}
+              style={{ fontWeight: 600, paddingLeft: 18, paddingRight: 18 }}
+              onClick={() =>
+                onDispatch({
+                  targetIds: targets.filter((t) => chosen.has(t.doc.id)).map((t) => t.doc.id),
+                })
+              }
+            >
+              <IconDispatch size={13} />{' '}
+              {busy ? 'Dispatching…' : nothingSelected ? 'Dispatch' : `Dispatch to ${chosen.size}`}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

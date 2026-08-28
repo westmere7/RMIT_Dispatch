@@ -33,7 +33,6 @@ import {
 import {
   buildDispatchTargets,
   lockBlocking,
-  summariseDispatch,
   versionName,
   type DispatchCandidate,
   type DispatchTarget,
@@ -291,7 +290,7 @@ export function ProjectView() {
     if (chosen.length === 0) return;
     setDispatchBusy(true);
     try {
-      const outcomes = await runDispatch({
+      await runDispatch({
         projectId,
         spaceId: project.spaceId,
         source: { id: source.id, pages: dispatchPages ?? [] },
@@ -300,9 +299,6 @@ export function ProjectView() {
       });
       setDispatchFrom(null);
       await load();
-      await dialog.alert(`Dispatched from ${source.title}`, {
-        message: summariseDispatch(outcomes),
-      });
     } catch (e) {
       console.error(e);
       await dialog.alert('Dispatch failed', { message: String(e) });
@@ -493,93 +489,95 @@ export function ProjectView() {
                   )}
                 </div>
 
-                <div className="lin-stats">
-                  {isMaster ? (
-                    <span className="pill">{fields.length} fields</span>
-                  ) : (
-                    <>
-                      {row.pendingCount > 0 && (
-                        <span className="pill pill-warning">{row.pendingCount} pending ↑</span>
-                      )}
-                      <span className="pill pill-success">{row.usageCount} synced</span>
-                    </>
-                  )}
-                </div>
-
-                <div className="lin-actions" onClick={(e) => e.stopPropagation()}>
-                  {/* Only a document something derives from can dispatch. */}
-                  <span className="lin-disp-slot">
-                    {canEdit && node.children.length > 0 && (
-                      <button
-                        className="lin-dispatch"
-                        title={`Push ${doc.title}'s shared content to the adaptations below it`}
-                        onClick={() => void openDispatch(doc)}
-                        disabled={busy}
-                      >
-                        <IconDispatch size={12} /> Dispatch
-                      </button>
+                <div className="lin-right" onClick={(e) => e.stopPropagation()}>
+                  <div className="lin-stats">
+                    {isMaster ? (
+                      <span className="pill">{fields.length} fields</span>
+                    ) : (
+                      <>
+                        {row.pendingCount > 0 && (
+                          <span className="pill pill-warning">{row.pendingCount} pending ↑</span>
+                        )}
+                        <span className="pill pill-success">{row.usageCount} synced</span>
+                      </>
                     )}
-                  </span>
-                  <button
-                    className={`lin-act ${(comments.get(doc.id)?.open ?? 0) > 0 ? 'has-open' : ''}`}
-                    title={
-                      comments.get(doc.id)
-                        ? `${comments.get(doc.id)!.total} comment(s), ${comments.get(doc.id)!.open} open`
-                        : 'No comments yet'
-                    }
-                    aria-label={`Comments on ${doc.title}`}
-                    onClick={() => navigate(`/docs/${doc.id}?tab=comments`)}
-                  >
-                    <IconMessage size={13} />
-                    <span>{comments.get(doc.id)?.total ?? 0}</span>
-                  </button>
+                  </div>
 
-                  {canEdit ? (
-                    <>
-                      <button
-                        className="icon-btn"
-                        title={
-                          allowChild
-                            ? `Derive an adaptation from ${doc.title}`
-                            : `Maximum depth reached (${MAX_ADAPTATION_DEPTH} levels)`
-                        }
-                        aria-label={`New adaptation from ${doc.title}`}
-                        onClick={() => setNewParent(doc)}
-                        disabled={busy || !allowChild}
-                      >
-                        <IconPlus size={14} />
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title={`${doc.title} settings`}
-                        aria-label={`Settings for ${doc.title}`}
-                        onClick={() => setSettingsFor(doc)}
-                        disabled={busy}
-                      >
-                        <IconSettings size={14} />
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title={doc.parentId ? 'Detach from parent' : 'Already detached'}
-                        aria-label={`Detach ${doc.title}`}
-                        onClick={() => void detachFromParent(row)}
-                        disabled={busy || isMaster || !doc.parentId}
-                      >
-                        <IconUnlink size={14} />
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title={isMaster ? 'Delete master' : 'Delete adaptation'}
-                        aria-label={`Delete ${doc.title}`}
-                        onClick={() => void removeDoc(row)}
-                        disabled={busy}
-                      >
-                        <IconTrash size={14} />
-                      </button>
-                    </>
-                  ) : (
-                    <span className="lin-actions-spacer" />
+                  {canEdit && node.children.length > 0 && (
+                    <button
+                      className="lin-dispatch"
+                      title={`Push ${doc.title}'s shared content to the adaptations below it`}
+                      onClick={() => void openDispatch(doc)}
+                      disabled={busy}
+                    >
+                      <IconDispatch size={12} /> Dispatch
+                    </button>
                   )}
+
+                  <div className="lin-actions">
+                    <button
+                      className={`lin-act ${(comments.get(doc.id)?.open ?? 0) > 0 ? 'has-open' : ''}`}
+                      title={
+                        comments.get(doc.id)
+                          ? `${comments.get(doc.id)!.total} comment(s), ${comments.get(doc.id)!.open} open`
+                          : 'No comments yet'
+                      }
+                      aria-label={`Comments on ${doc.title}`}
+                      onClick={() => navigate(`/docs/${doc.id}?tab=comments`)}
+                    >
+                      <IconMessage size={13} />
+                      <span>{comments.get(doc.id)?.total ?? 0}</span>
+                    </button>
+
+                    {canEdit ? (
+                      <>
+                        <button
+                          className="icon-btn"
+                          title={
+                            allowChild
+                              ? `Derive an adaptation from ${doc.title}`
+                              : `Maximum depth reached (${MAX_ADAPTATION_DEPTH} levels)`
+                          }
+                          aria-label={`New adaptation from ${doc.title}`}
+                          onClick={() => setNewParent(doc)}
+                          disabled={busy || !allowChild}
+                        >
+                          <IconPlus size={14} />
+                        </button>
+                        <button
+                          className="icon-btn"
+                          title={`${doc.title} settings`}
+                          aria-label={`Settings for ${doc.title}`}
+                          onClick={() => setSettingsFor(doc)}
+                          disabled={busy}
+                        >
+                          <IconSettings size={14} />
+                        </button>
+                        {!isMaster && doc.parentId && (
+                          <button
+                            className="icon-btn"
+                            title="Detach from parent"
+                            aria-label={`Detach ${doc.title}`}
+                            onClick={() => void detachFromParent(row)}
+                            disabled={busy}
+                          >
+                            <IconUnlink size={14} />
+                          </button>
+                        )}
+                        <button
+                          className="icon-btn"
+                          title={isMaster ? 'Delete master' : 'Delete adaptation'}
+                          aria-label={`Delete ${doc.title}`}
+                          onClick={() => void removeDoc(row)}
+                          disabled={busy}
+                        >
+                          <IconTrash size={14} />
+                        </button>
+                      </>
+                    ) : (
+                      <span className="lin-actions-spacer" />
+                    )}
+                  </div>
                 </div>
               </div>
 
