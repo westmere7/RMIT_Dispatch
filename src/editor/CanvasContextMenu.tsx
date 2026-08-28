@@ -10,6 +10,7 @@ import {
   IconPencil,
   IconPlus,
   IconShapes,
+  IconSliders,
   IconTable,
   IconTrash,
   IconType,
@@ -191,11 +192,33 @@ export function CanvasContextMenu({
 
 
   /**
-   * With nothing selected there is no text to insert into, so create a
-   * text block that carries the field — the field is still a live embed.
+   * Insert any sync field as a new block on the page matching its kind.
    */
   const addFieldBlock = async (f: SyncField) => {
     if (!page) return;
+    if (f.value.kind === 'table') {
+      dispatch({
+        type: 'ADD_BLOCK',
+        pageId: page.id,
+        blockType: 'table',
+        table: { headerRow: f.value.headerRow, rows: f.value.rows },
+        binding: { fieldId: f.id, sourceBlockId: '', direction: defaultDirection },
+      });
+      return;
+    }
+    if (f.value.kind === 'image') {
+      dispatch({
+        type: 'ADD_BLOCK',
+        pageId: page.id,
+        blockType: 'image',
+        storagePath: f.value.storagePath,
+        alt: f.value.alt,
+        caption: f.value.caption,
+        fit: f.value.fit,
+        binding: { fieldId: f.id, sourceBlockId: '', direction: defaultDirection },
+      });
+      return;
+    }
     const children = resolveFieldInline(f.id, fieldMap) ?? [{ text: f.name }];
     const wrapped = insertFieldAt(
       emptyRich(),
@@ -209,6 +232,10 @@ export function CanvasContextMenu({
       pageId: page.id,
       blockType: 'text',
       body: wrapped?.rich ?? emptyRich(),
+      binding:
+        f.value.kind === 'richtext' && f.value.rich.length > 1
+          ? { fieldId: f.id, sourceBlockId: '', direction: defaultDirection }
+          : undefined,
     });
   };
 
@@ -225,12 +252,14 @@ export function CanvasContextMenu({
 
     const usages = fields.length ? collectUsages(state.pages).filter((u) => u.fieldId === target.fieldId) : [];
     const preview = field ? plainText(valueAsRich(field.value)) : '';
+    const shape = field ? fieldShapeLabel(field.value) : '';
+    const scope = field?.scope === 'global' ? 'Global' : 'Project';
 
     const items: MenuItem[] = [
       {
         kind: 'header',
         label: field?.name ?? '(deleted field)',
-        sub: preview ? `“${preview.slice(0, 44)}${preview.length > 44 ? '…' : ''}”` : undefined,
+        sub: `${shape.toUpperCase()} · ${scope}${preview ? ` · “${preview.slice(0, 32)}${preview.length > 32 ? '…' : ''}”` : ''}`,
       },
     ];
 
@@ -238,7 +267,6 @@ export function CanvasContextMenu({
       items.push({
         kind: 'item',
         label: 'Edit field value…',
-        hint: 'isolated',
         icon: <IconPencil size={13} />,
         onSelect: () => onEditField(field),
       });
@@ -248,6 +276,7 @@ export function CanvasContextMenu({
       items.push({
         kind: 'submenu',
         label: 'Sync direction',
+        icon: <IconArrowUpDown size={13} />,
         items: DIRECTIONS.map((d) => ({
           kind: 'check' as const,
           label: d.label,
@@ -259,7 +288,7 @@ export function CanvasContextMenu({
 
       items.push({
         kind: 'item',
-        label: 'Unlink this embed',
+        label: 'Unlink field',
         hint: 'keep text',
         icon: <IconUnlink size={13} />,
         onSelect: () => {
@@ -268,19 +297,10 @@ export function CanvasContextMenu({
         },
       });
 
-      // Narrow: re-bind a smaller selection sitting inside this span.
-      items.push({
-        kind: 'item',
-        label: 'Narrow: field from selection',
-        hint: target.range ? undefined : 'select first',
-        icon: <IconLink size={13} />,
-        disabled: !target.range,
-        onSelect: () => {
-          void bindRange(rich, target.range).then((next) => next && setBody(next));
-        },
-      });
+      // Field settings submenu for secondary actions
+      const settings: MenuItem[] = [];
 
-      items.push({
+      settings.push({
         kind: 'item',
         label: 'Rename field…',
         icon: <IconPencil size={13} />,
@@ -297,51 +317,70 @@ export function CanvasContextMenu({
             });
         },
       });
-    }
 
-    items.push({ kind: 'separator' });
-    items.push({
-      kind: 'item',
-      label: `Open in Sync panel${usages.length ? ` · ${usages.length} here` : ''}`,
-      onSelect: () => {
-        setActiveSpan({
-          blockId: block.id,
-          fieldId: target.fieldId!,
-          para: loc.para,
-          path: loc.path,
+      if (target.range) {
+        settings.push({
+          kind: 'item',
+          label: 'Narrow: field from selection',
+          icon: <IconLink size={13} />,
+          onSelect: () => {
+            void bindRange(rich, target.range).then((next) => next && setBody(next));
+          },
         });
-        setTab('sync');
-      },
-    });
+      }
 
-    if (doc.kind === 'adaptation' && masterDoc) {
-      items.push({
+      settings.push({
         kind: 'item',
-        label: 'Go to master',
-        onSelect: () => navigate(`/docs/${masterDoc.id}`),
-      });
-    }
-
-    if (!readOnly && field) {
-      items.push({
-        kind: 'item',
-        label: 'Delete field (project-wide)',
-        danger: true,
-        icon: <IconTrash size={13} />,
+        label: `Open in Sync panel${usages.length ? ` (${usages.length} usages)` : ''}`,
+        icon: <IconLink size={13} />,
         onSelect: () => {
-          void dialog
-            .confirm(`Delete field “${field.name}”?`, {
-              message: 'Every embed keeps its current text but stops syncing.',
-              confirmLabel: 'Delete field',
-              danger: true,
-            })
-            .then(async (ok) => {
-              if (!ok) return;
-              await deleteFieldRow(field.id);
-              setFields((prev) => prev.filter((f) => f.id !== field.id));
-              setActiveSpan(null);
-            });
+          setActiveSpan({
+            blockId: block.id,
+            fieldId: target.fieldId!,
+            para: loc.para,
+            path: loc.path,
+          });
+          setTab('sync');
         },
+      });
+
+      if (doc.kind === 'adaptation' && masterDoc) {
+        settings.push({
+          kind: 'item',
+          label: `Go to ${masterDoc.kind === 'master' ? 'master' : 'parent'}`,
+          onSelect: () => navigate(`/docs/${masterDoc.id}`),
+        });
+      }
+
+      if (field) {
+        settings.push({ kind: 'separator' });
+        settings.push({
+          kind: 'item',
+          label: 'Delete field (project-wide)',
+          danger: true,
+          icon: <IconTrash size={13} />,
+          onSelect: () => {
+            void dialog
+              .confirm(`Delete field “${field.name}”?`, {
+                message: 'Every embed keeps its current text but stops syncing.',
+                confirmLabel: 'Delete field',
+                danger: true,
+              })
+              .then(async (ok) => {
+                if (!ok) return;
+                await deleteFieldRow(field.id);
+                setFields((prev) => prev.filter((f) => f.id !== field.id));
+                setActiveSpan(null);
+              });
+          },
+        });
+      }
+
+      items.push({
+        kind: 'submenu',
+        label: 'Field settings',
+        icon: <IconSliders size={13} />,
+        items: settings,
       });
     }
 
@@ -370,12 +409,20 @@ export function CanvasContextMenu({
     if (cellBinding) {
       const cf = fieldMap.get(cellBinding.fieldId);
       items.push({ kind: 'header', label, sub: `follows “${cf?.name ?? 'field'}”` });
+      if (cf) {
+        items.push({
+          kind: 'item',
+          label: 'Edit field value…',
+          icon: <IconPencil size={13} />,
+          onSelect: () => onEditField(cf),
+        });
+      }
       items.push({
         kind: 'submenu',
         label: 'Cell sync direction',
         icon: <IconArrowUpDown size={13} />,
         items: DIRECTIONS.map((d) => ({
-          kind: 'item' as const,
+          kind: 'check' as const,
           label: d.label,
           checked: cellBinding.direction === d.dir,
           onSelect: () =>
@@ -801,27 +848,15 @@ export function CanvasContextMenu({
     return items;
   };
 
-  /** On empty page: drop a field in as a block of its own. */
+  /** On empty page: drop any defined field in as a block of its own matching its shape. */
   const pageSyncItems = (): MenuItem[] => {
     if (block || readOnly || !page || fields.length === 0) return [];
-    const { fits, unfit } = partitionByFit(fields, 'inline');
     return [
       {
         kind: 'submenu',
         label: 'Insert sync field as a new block',
         icon: <IconLink size={13} />,
-        items: [
-          ...(fits.length
-            ? fieldItems(fits, (f) => void addFieldBlock(f))
-            : ([{ kind: 'note', label: 'No inline-compatible fields yet.' }] as MenuItem[])),
-          ...(unfit.length
-            ? ([
-                { kind: 'separator' },
-                { kind: 'note', label: 'Needs a matching block instead' },
-              ] as MenuItem[])
-            : []),
-          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
-        ],
+        items: fieldItems(fields, (f) => void addFieldBlock(f)),
       },
     ];
   };
@@ -918,33 +953,39 @@ export function CanvasContextMenu({
    * Within the section: narrowest claim first. The embed under the
    * pointer, then the selection, then the cell, then the whole block.
    */
-  const syncSection = joinSections([
-    spanItems(),
-    selectionSyncItems(),
-    cellItems(),
-    blockSyncItems(),
-    pageSyncItems(),
-  ]);
+  /*
+   * Clean menu hierarchy:
+   * 1. If clicking on an active Field Span:
+   *    Show the selected field first (Name, preview, Edit, Direction, Unlink, Field settings submenu),
+   *    followed by selection formatting (if range) and block actions.
+   * 2. If clicking on a Bound Cell or Bound Block:
+   *    Show the binding first (Name, Edit, Direction, Unlink), followed by block actions.
+   * 3. If clicking on regular text / selection / empty canvas:
+   *    Show sync creation/insertion submenus, text formatting, and block/page actions.
+   */
+  const isSpanTarget = !!target.fieldId;
+  const isBoundTarget = !!blockBinding || !!cellBinding;
 
-  const items: MenuItem[] = joinSections([
-    syncSection.length
-      ? [
-          {
-            kind: 'header' as const,
-            label: 'Sync fields',
-            // The embed's own header names the field right below this
-            // one; two subtitles in a row is just noise.
-            ...(spanItems().length
-              ? {}
-              : { sub: block ? 'what this block shares' : 'shared content' }),
-          },
-          ...syncSection,
-        ]
-      : [],
-    selectionFormatItems(),
-    blockItems(),
-    pageItems(),
-  ]);
+  const items: MenuItem[] = isSpanTarget
+    ? joinSections([
+        spanItems(),
+        selectionFormatItems(),
+        blockItems(),
+      ])
+    : isBoundTarget
+      ? joinSections([
+          block?.type === 'table' && cellBinding ? cellItems() : blockSyncItems(),
+          selectionFormatItems(),
+          blockItems(),
+        ])
+      : joinSections([
+          selectionSyncItems(),
+          block?.type === 'table' ? cellItems() : blockSyncItems(),
+          pageSyncItems(),
+          selectionFormatItems(),
+          blockItems(),
+          pageItems(),
+        ]);
 
   if (readOnly && items.length === 0) {
     items.push({ kind: 'note', label: 'Read-only — press Edit to take the lock.' });

@@ -115,58 +115,50 @@ export function TableView({
 
   return (
     <div className="block-content size-md" style={{ padding: '2%' }}>
-      <table className="block-table">
-        <colgroup>
-          {colPct.map((w, ci) => (
-            <col key={ci} style={{ width: `${w}%` }} />
-          ))}
-        </colgroup>
-        <tbody>
-          {block.rows.map((row, ri) => (
-            <tr key={ri} style={{ height: `${rowPct[ri] ?? 0}%` }}>
-              {row.map((cell, ci) => {
-                if (isCovered(block, ri, ci)) return null;
-                const merge = mergeAt(block, ri, ci);
-                const image = cellImageAt(block, ri, ci);
-                const fmt = cellFormatAt(block, ri, ci);
-                const isHeader = block.headerRow && ri === 0;
-                const Tag = isHeader ? 'th' : 'td';
-                return (
-                  <Tag
-                    key={ci}
-                    /* The SIZE goes on the cell, not on its runs: the
-                       paragraph's own font-size sets the minimum line
-                       height, so runs alone would leave a small cell
-                       sitting in a tall line. */
-                    style={{ textAlign: fmt?.align, fontSize: runFontSize(fmt?.size, 'md') }}
-                    data-cell-row={ri}
-                    data-cell-col={ci}
-                    {...(merge ? { rowSpan: merge.rowSpan, colSpan: merge.colSpan } : {})}
-                    {...(isHeader ? { scope: 'col' as const } : {})}
-                  >
-                    {/* A cell cannot clip its own overflow — `overflow`
-                        does nothing on a table cell — so the content sits
-                        in a box that can. Present in BOTH modes, so
-                        opening the editor moves nothing. */}
-                    <div className="cell-body">
-                      {image?.storagePath && (
-                        <img
-                          className="cell-image"
-                          src={mediaUrl(image.storagePath)}
-                          alt={image.alt ?? ''}
-                          style={{ objectFit: image.fit ?? 'contain' }}
-                          draggable={false}
-                        />
-                      )}
-                      {renderCell ? renderCell(ri, ci, cell) : <RichTextView rich={cell} />}
-                    </div>
-                  </Tag>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div
+        className="block-table"
+        style={{
+          gridTemplateColumns: colPct.map((w) => `${w}%`).join(' '),
+          gridTemplateRows: rowPct.map((h) => `${h}%`).join(' '),
+        }}
+      >
+        {block.rows.map((row, ri) =>
+          row.map((cell, ci) => {
+            if (isCovered(block, ri, ci)) return null;
+            const merge = mergeAt(block, ri, ci);
+            const image = cellImageAt(block, ri, ci);
+            const fmt = cellFormatAt(block, ri, ci);
+            const isHeader = block.headerRow && ri === 0;
+            return (
+              <div
+                key={`${ri}-${ci}`}
+                className={`table-cell ${isHeader ? 'table-header' : ''}`}
+                style={{
+                  gridRow: merge ? `${ri + 1} / span ${merge.rowSpan}` : `${ri + 1}`,
+                  gridColumn: merge ? `${ci + 1} / span ${merge.colSpan}` : `${ci + 1}`,
+                  textAlign: fmt?.align,
+                  fontSize: runFontSize(fmt?.size, 'md'),
+                }}
+                data-cell-row={ri}
+                data-cell-col={ci}
+              >
+                <div className="cell-body">
+                  {image?.storagePath && (
+                    <img
+                      className="cell-image"
+                      src={mediaUrl(image.storagePath)}
+                      alt={image.alt ?? ''}
+                      style={{ objectFit: image.fit ?? 'contain' }}
+                      draggable={false}
+                    />
+                  )}
+                  {renderCell ? renderCell(ri, ci, cell) : <RichTextView rich={cell} />}
+                </div>
+              </div>
+            );
+          }),
+        )}
+      </div>
       {nRows === 0 || nCols === 0 ? <span className="muted text-xs">Empty table</span> : null}
     </div>
   );

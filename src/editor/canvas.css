@@ -288,31 +288,33 @@
 
 /* Table blocks */
 .block-table {
+  display: grid;
   width: 100%;
   height: 100%;
-  border-collapse: collapse;
+  box-sizing: border-box;
   font-size: inherit;
   /* Opaque: the grid overlay is painted on the page under the blocks, so
      a see-through table shows graph paper behind its own content. */
   background: var(--surface);
-  /* The author's column widths are the widths. Without this the content
-     of one cell can widen a column the author sized by hand. */
-  table-layout: fixed;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
 }
-.block-table td,
-.block-table th {
-  border: 1px solid var(--border);
-  /* Relative, so cell spacing scales with zoom like the text in it.
-     The rule stays 1px on purpose — same reasoning as the shapes'
-     `non-scaling-stroke`: a hairline disappears when zoomed out. */
-  padding: 0.15em 0.45em;
+.block-table .table-cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  overflow: hidden;
   vertical-align: top;
   font-weight: inherit;
-  overflow-wrap: break-word;
+  background: var(--surface);
 }
 /* The header has to be tellable apart at a glance — a tint alone reads
    as a highlight, so it also carries weight and a rule under it. */
-.block-table th {
+.block-table .table-cell.table-header {
   font-weight: 600;
   background: var(--surface-2);
   border-bottom-width: 2px;
@@ -320,13 +322,19 @@
 }
 
 /* Copy that outgrows its cell is CUT OFF, not drawn across the rule
-   below it. `overflow` does nothing on a table cell, so the content sits
-   in a box that can clip — and that box is there in both modes, so
-   opening the editor moves nothing. */
+   below it. In CSS Grid with min-height: 0 and min-width: 0, tracks
+   strictly adhere to rowPercents and cell-body clips any overflowing
+   content cleanly. */
 .block-table .cell-body {
+  width: 100%;
   height: 100%;
-  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
+  box-sizing: border-box;
+  /* Relative, so cell spacing scales with zoom like the text in it. */
+  padding: 0.15em 0.45em;
+  overflow-wrap: break-word;
 }
 
 /* A picture in a cell sits above the cell's text and never forces the
@@ -595,7 +603,7 @@
 
 /* ---------- On-canvas text editing ---------- */
 .block-frame.editing {
-  outline: 1.5px solid var(--primary);
+  outline: 1.5px solid var(--accent);
   cursor: text;
   z-index: 8;
   background: var(--surface);
@@ -605,8 +613,12 @@
   /* Anchors the "editing field" chip. */
   position: relative;
 }
-.inline-editor-body {
-  outline: none;
+.inline-editor-body,
+.inline-editor-body:focus,
+.inline-editor-body:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
   min-height: 1em;
 }
 .inline-editor-body p {
@@ -633,12 +645,11 @@
 }
 
 /* A caret anchor is not decoration: it is the only place the caret can
-   stand next to an atomic embed. One pixel of layout box is what makes
-   that position REAL — a truly zero-width one gets snapped past, and the
-   gap in front of a field that fills a whole line stays unreachable. */
+   stand next to an atomic embed. */
 [data-anchor] {
-  display: inline-block;
-  width: 1px;
+  display: inline;
+  user-select: none;
+  white-space: nowrap;
 }
 
 /* ---------- Atomic vs stepped-into embeds ----------
@@ -647,15 +658,24 @@
    in and two neighbours cannot merge. Double-clicking steps into one,
    and that has to be unmistakable — otherwise you cannot tell whether
    you are editing the block or the field. */
+.field-span,
+.inline-editor-body .field-span {
+  display: inline;
+  vertical-align: baseline;
+  white-space: inherit;
+}
 .field-span.is-atomic {
   cursor: default;
   /* Signals "one thing", and stops a drag inside it from selecting
      half an embed. */
   user-select: all;
+  display: inline;
 }
 .field-span.is-entered {
   cursor: text;
   user-select: text;
+  display: inline;
+  vertical-align: baseline;
   outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: 2px;

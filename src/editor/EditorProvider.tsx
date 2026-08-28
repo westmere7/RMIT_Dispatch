@@ -12,7 +12,7 @@ import {
 import { effectiveColumns } from '../grid/presets';
 import { clampPos, createBlock, duplicateBlock, type TableSpec } from '../lib/blocks';
 import { newId } from '../lib/ids';
-import { applySyncDown, type FieldMap } from '../lib/syncfields';
+import { applySyncDown, propagateInDocumentFields, type FieldMap } from '../lib/syncfields';
 import type {
   Block,
   BlockType,
@@ -34,6 +34,7 @@ import type {
 
 export interface EditorState {
   pages: Page[];
+  fields: FieldMap;
   selection: string[];
   currentPageId: string | null;
   grid: GridConfig;
@@ -55,7 +56,7 @@ export interface EditorState {
 }
 
 export type EditorAction =
-  | { type: 'INIT'; pages: Page[]; grid: GridConfig }
+  | { type: 'INIT'; pages: Page[]; grid: GridConfig; fields?: FieldMap }
   | { type: 'REMOTE_PAGES'; pages: Page[] }
   | { type: 'RESTORE_PAGES'; pages: Page[] }
   | { type: 'UNDO' }
@@ -77,8 +78,13 @@ export type EditorAction =
       shape?: ShapeKind;
       /** Pre-filled body, e.g. a text block seeded with a field embed. */
       body?: RichText;
-      /** Rows, columns and header for a new table. */
-      table?: TableSpec;
+      /** Rows, columns and header for a new table, or existing table data. */
+      table?: TableSpec | { headerRow: boolean; rows: RichText[][] };
+      storagePath?: string;
+      alt?: string;
+      caption?: string;
+      fit?: 'contain' | 'cover';
+      binding?: Block['binding'];
     }
   | {
       type: 'UPDATE_BLOCK';
@@ -157,6 +163,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const pages = action.pages;
       return {
         pages,
+        fields: action.fields ?? new Map(),
         selection: [],
         currentPageId: pages[0]?.id ?? null,
         grid: action.grid,
@@ -245,10 +252,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'FIELDS_CHANGED': {
       const pages = applySyncDown(state.pages, action.fields, action.masterBlocks);
-      // Applying field values is a content change that must persist if we
-      // hold the lock — mark as local only when something actually changed.
-      if (JSON.stringify(pages) === JSON.stringify(state.pages)) return state;
-      return { ...state, pages, origin: 'remote' };
+      if (JSON.stringify(pages) === JSON.stringify(state.pages)) {
+        return { ...state, fields: action.fields };
+      }
+      return { ...state, pages, fields: action.fields, origin: 'remote' };
     }
 
     case 'SET_PAGE':
@@ -292,6 +299,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         shape: action.shape,
         body: action.body,
         table: action.table,
+        storagePath: action.storagePath,
+        alt: action.alt,
+        caption: action.caption,
+        fit: action.fit,
+        binding: action.binding,
       });
       const pages = mutatePage(state.pages, action.pageId, (p) => ({
         ...p,
@@ -301,21 +313,37 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'UPDATE_BLOCK': {
-      const pages = mutatePage(state.pages, action.pageId, (p) => ({
+      const nextPages = mutatePage(state.pages, action.pageId, (p) => ({
         ...p,
         blocks: p.blocks.map((b) =>
           b.id === action.blockId ? ({ ...b, ...action.patch } as Block) : b,
         ),
       }));
-      return local(state, pages, undefined, action.coalesce);
+      const { pages, liveFields } = propagateInDocumentFields(
+        nextPages,
+        state.fields,
+        action.blockId,
+      );
+      return {
+        ...local(state, pages, undefined, action.coalesce),
+        fields: liveFields,
+      };
     }
 
     case 'REPLACE_BLOCK': {
-      const pages = mutatePage(state.pages, action.pageId, (p) => ({
+      const nextPages = mutatePage(state.pages, action.pageId, (p) => ({
         ...p,
         blocks: p.blocks.map((b) => (b.id === action.block.id ? action.block : b)),
       }));
-      return local(state, pages);
+      const { pages, liveFields } = propagateInDocumentFields(
+        nextPages,
+        state.fields,
+        action.block.id,
+      );
+      return {
+        ...local(state, pages),
+        fields: liveFields,
+      };
     }
 
     case 'SET_POSITIONS': {
@@ -470,6 +498,7 @@ const BROADCAST_DEBOUNCE_MS = 250;
 export function EditorProvider({
   initialPages,
   grid,
+  fields,
   readOnly,
   onPersist,
   onBroadcast,
@@ -480,6 +509,7 @@ export function EditorProvider({
 }: {
   initialPages: Page[];
   grid: GridConfig;
+  fields?: FieldMap;
   readOnly: boolean;
   onPersist: (pages: Page[]) => Promise<void>;
   onBroadcast?: (pages: Page[]) => void;
@@ -493,6 +523,7 @@ export function EditorProvider({
 
   const [state, dispatch] = useReducer(editorReducer, undefined, () => ({
     pages: initialPages,
+    fields: fields ?? new Map(),
     selection: [],
     currentPageId: initialPages[0]?.id ?? null,
     grid,

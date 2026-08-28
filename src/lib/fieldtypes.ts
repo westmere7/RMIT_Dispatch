@@ -8,6 +8,8 @@ import type { Block, FieldValue, SyncField } from '../types';
    ============================================================ */
 
 export type FieldTarget =
+  /** Any field shape allowed (e.g. canvas insertion). */
+  | 'all'
   /** A caret or selection inside running text. */
   | 'inline'
   /** A whole text block's body. */
@@ -55,40 +57,13 @@ export function fieldFits(value: FieldValue, target: FieldTarget): Compatibility
   const shape = fieldShape(value);
 
   switch (target) {
+    case 'all':
     case 'inline':
     case 'tableCell': {
-      if (shape === 'table') {
-        return {
-          ok: false,
-          reason: 'A table field can only fill a whole table block.',
-        };
-      }
-      if (shape === 'image') {
-        return { ok: false, reason: 'An image field can only fill an image block.' };
-      }
-      if (shape === 'group') {
-        return {
-          ok: false,
-          reason:
-            'A combination field holds several pieces at once, so it cannot sit inside a line. Bind its parts individually.',
-        };
-      }
-      if (shape === 'rich-multi') {
-        return {
-          ok: false,
-          reason:
-            'This field holds several paragraphs, so it cannot sit inside a line. Bind a whole text block to it instead.',
-        };
-      }
+      // All field shapes are supported for insertion.
       return OK;
     }
     case 'textBlock': {
-      if (shape === 'table' || shape === 'image' || shape === 'group') {
-        return {
-          ok: false,
-          reason: `A ${SHAPE_LABEL[shape]} field cannot fill a text block.`,
-        };
-      }
       return OK;
     }
     case 'tableBlock': {

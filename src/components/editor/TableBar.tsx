@@ -5,7 +5,7 @@ import { useWorkspace } from '../../editor/workspaceContext';
 import { uuid } from '../../lib/ids';
 import { DEFAULT_COMPRESSION } from '../../lib/imagecompress';
 import { plainText } from '../../lib/richtext';
-import { autoFieldName } from '../../lib/syncfields';
+import { autoFieldName, valueAsRich } from '../../lib/syncfields';
 import {
   cellImageAt,
   deleteCol,
@@ -15,6 +15,7 @@ import {
   isCovered,
   mergeAt,
   mergeCells,
+  setCellContent,
   setCellImage,
   tableSize,
   unmergeAt,
@@ -139,8 +140,16 @@ export function TableBar({
     const direction: SyncDirection = doc.kind === 'master' ? 'two-way' : 'down';
     if (!createNew) {
       const f = fieldMap.get(fieldId);
-      // A table field owns a whole table; it cannot live in one cell.
-      if (!f || !(await checkFit(f, 'tableCell'))) return;
+      if (!f) return;
+      const rich = valueAsRich(f.value);
+      update({
+        rows: setCellContent(block, r, c, rich),
+        cellBindings: [
+          ...(block.cellBindings ?? []).filter((b) => !(b.row === r && b.col === c)),
+          { row: r, col: c, fieldId, direction },
+        ],
+      } as Partial<Block>);
+      return;
     }
     if (createNew) {
       const rich = block.rows[r]?.[c] ?? [[{ text: '' }]];

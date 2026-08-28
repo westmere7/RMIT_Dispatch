@@ -479,7 +479,7 @@ export function GlobalFields() {
                       <>
                         <button
                           className="icon-btn"
-                          title="Edit field in isolation"
+                          title="Edit field"
                           aria-label={`Edit ${row.field.name}`}
                           onClick={() => setEditing(row.field)}
                         >

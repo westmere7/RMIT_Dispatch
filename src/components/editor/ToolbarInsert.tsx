@@ -68,8 +68,8 @@ export function ShapeMenu({ pageId }: { pageId: string }) {
 }
 
 /**
- * Add an existing sync field to the page when nothing is selected: the
- * field arrives inside a new text block, still as a live embed.
+ * Add an existing sync field to the page when nothing is selected:
+ * creates a matching block (table, image, text) bound to the field.
  */
 export function InsertFieldButton({ pageId }: { pageId: string }) {
   const { fields, fieldMap } = useWorkspace();
@@ -77,6 +77,29 @@ export function InsertFieldButton({ pageId }: { pageId: string }) {
   const { defaultDirection } = useFieldOps();
 
   const add = (f: SyncField) => {
+    if (f.value.kind === 'table') {
+      dispatch({
+        type: 'ADD_BLOCK',
+        pageId,
+        blockType: 'table',
+        table: { headerRow: f.value.headerRow, rows: f.value.rows },
+        binding: { fieldId: f.id, sourceBlockId: '', direction: defaultDirection },
+      });
+      return;
+    }
+    if (f.value.kind === 'image') {
+      dispatch({
+        type: 'ADD_BLOCK',
+        pageId,
+        blockType: 'image',
+        storagePath: f.value.storagePath,
+        alt: f.value.alt,
+        caption: f.value.caption,
+        fit: f.value.fit,
+        binding: { fieldId: f.id, sourceBlockId: '', direction: defaultDirection },
+      });
+      return;
+    }
     const children = resolveFieldInline(f.id, fieldMap) ?? [{ text: f.name }];
     const wrapped = insertFieldAt(
       emptyRich(),
@@ -90,13 +113,17 @@ export function InsertFieldButton({ pageId }: { pageId: string }) {
       pageId,
       blockType: 'text',
       body: wrapped?.rich ?? emptyRich(),
+      binding:
+        f.value.kind === 'richtext' && f.value.rich.length > 1
+          ? { fieldId: f.id, sourceBlockId: '', direction: defaultDirection }
+          : undefined,
     });
   };
 
   return (
     <FieldPicker
       fields={fields}
-      target="inline"
+      target="all"
       label="Field"
       compact
       onPick={add}

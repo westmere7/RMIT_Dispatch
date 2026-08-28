@@ -222,7 +222,7 @@ export function SyncPanel() {
       { kind: 'item', label: 'Show value…', onSelect: () => setPeeking(f) },
       {
         kind: 'item',
-        label: 'Edit in isolation…',
+        label: 'Edit…',
         icon: <IconPencil size={13} />,
         onSelect: () => setEditing(f),
       },

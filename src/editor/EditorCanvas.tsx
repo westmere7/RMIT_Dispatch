@@ -20,6 +20,7 @@ import { useEditor } from './EditorProvider';
 import { PageSurface } from './PageSurface';
 import { useDragResize } from './useDragResize';
 import { PropertiesBar } from './PropertiesBar';
+import { useWorkspace } from './workspaceContext';
 import { useZoomPan } from './useZoomPan';
 import './canvas.css';
 
@@ -49,9 +50,31 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
   /** The insert-a-table panel, opened from the canvas menu. */
   const [newTable, setNewTable] = useState(false);
   const { onBlockPointerDown, onHandlePointerDown } = useDragResize(surfaceRef);
+  const { applyUpstream } = useWorkspace();
   const editingId = state.editingBlockId;
   /** Which embed is open for text editing, shown in the properties bar. */
   const [enteredField, setEnteredField] = useState<string | null>(null);
+  const prevEnteredFieldRef = useRef<string | null>(null);
+
+  const handleEnteredField = useCallback((fieldId: string | null) => {
+    const prev = prevEnteredFieldRef.current;
+    prevEnteredFieldRef.current = fieldId;
+    setEnteredField(fieldId);
+    if (prev && !fieldId) {
+      // Exited field isolation mode for `prev` -> commit changes to the variable!
+      void applyUpstream(prev);
+    }
+  }, [applyUpstream]);
+
+  const prevEditingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevEditingIdRef.current;
+    prevEditingIdRef.current = editingId;
+    if (prev && !editingId) {
+      // Exited block editing -> commit any field changes to the variable!
+      void applyUpstream();
+    }
+  }, [editingId, applyUpstream]);
 
 
   // Keyboard shortcuts (ignored while typing in inputs/editors).
@@ -173,7 +196,7 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
             onBlockPointerDown={onBlockPointerDown}
             onHandlePointerDown={onHandlePointerDown}
               onSpanClick={onSpanClick}
-              onEnteredField={setEnteredField}
+              onEnteredField={handleEnteredField}
             onStartEdit={(blockId) => dispatch({ type: 'EDIT_TEXT', blockId })}
             onContentChange={setContent}
             onBlockContextMenu={(e, blockId, fieldId) => {

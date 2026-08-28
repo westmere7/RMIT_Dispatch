@@ -231,66 +231,95 @@ export function FieldPeekDialog({
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" style={{ maxWidth: wide ? 780 : 560 }}>
+        {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
           <span className={`pill ${isGlobal ? 'pill-accent' : ''}`}>
             {shapeIcon(field.value)}
             {isGlobal ? 'global' : 'project'}
           </span>
-          <h2 style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{field.name}</h2>
+          <span className="pill" style={{ opacity: 0.85, fontSize: 10 }}>
+            {fieldShapeLabel(field.value)}
+          </span>
+          <h2 style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', margin: 0, fontSize: 16 }}>{field.name}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             <IconX />
           </button>
         </div>
 
+        {/* Metadata */}
         <div className="fp-peek-meta">
-          <span>{fieldShapeLabel(field.value)}</span>
-          <span>·</span>
-          <span>{field.folder ? field.folder : 'root folder'}</span>
+          <span>Folder: <strong>{field.folder ? field.folder : 'root'}</strong></span>
           {a.availability && (
             <>
               <span>·</span>
-              <span>{a.availability}</span>
+              <span>Available to: <strong>{a.availability}</strong></span>
             </>
           )}
         </div>
 
-        <div className="fv-full" style={{ marginTop: 12 }}>
+        {/* Value Section */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+            Canonical Value
+          </span>
+          {a.onEdit && (
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => run(a.onEdit)}
+              style={{ color: 'var(--accent)', gap: 4 }}
+              title="Edit field value"
+            >
+              <IconPencil size={11} /> Edit
+            </button>
+          )}
+        </div>
+
+        <div
+          className={`fv-full ${a.onEdit ? 'clickable-edit' : ''}`}
+          onClick={a.onEdit ? () => run(a.onEdit) : undefined}
+          title={a.onEdit ? 'Click to edit' : undefined}
+        >
           <FieldValueView value={field.value} />
         </div>
 
         {a.extra}
 
+        {/* Action Bar with clear visual hierarchy */}
         <div className="fp-peek-actions">
-          {a.onEdit && (
-            <button className="btn btn-sm" onClick={() => run(a.onEdit)}>
-              <IconPencil size={12} /> Edit value
+          <div className="fp-peek-actions-secondary">
+            {a.onMove && (
+              <button className="btn btn-sm" onClick={() => run(a.onMove)}>
+                <IconChevronRight size={12} /> Move folder
+              </button>
+            )}
+            {a.onToggleScope && (
+              <button className="btn btn-sm" onClick={() => run(a.onToggleScope)}>
+                {isGlobal ? <IconUnlink size={12} /> : <IconLink size={12} />}
+                {isGlobal ? 'Make project-only' : 'Make global'}
+              </button>
+            )}
+            {a.onUnlinkEmbed && (
+              <button className="btn btn-sm" onClick={() => run(a.onUnlinkEmbed)}>
+                <IconUnlink size={12} /> Unlink here
+              </button>
+            )}
+            {a.onDelete && (
+              <button className="btn btn-danger btn-sm" onClick={() => run(a.onDelete)}>
+                <IconTrash size={12} /> Delete
+              </button>
+            )}
+          </div>
+
+          <div className="fp-peek-actions-primary">
+            <button className="btn btn-sm" onClick={onClose}>
+              Close
             </button>
-          )}
-          {a.onMove && (
-            <button className="btn btn-sm" onClick={() => run(a.onMove)}>
-              <IconChevronRight size={12} /> Move to folder
-            </button>
-          )}
-          {a.onToggleScope && (
-            <button className="btn btn-sm" onClick={() => run(a.onToggleScope)}>
-              {isGlobal ? <IconUnlink size={12} /> : <IconLink size={12} />}
-              {isGlobal ? 'Make project-only' : 'Make global'}
-            </button>
-          )}
-          {a.onUnlinkEmbed && (
-            <button className="btn btn-sm" onClick={() => run(a.onUnlinkEmbed)}>
-              <IconUnlink size={12} /> Unlink here
-            </button>
-          )}
-          <span style={{ flex: 1 }} />
-          {a.onDelete && (
-            <button className="btn btn-danger btn-sm" onClick={() => run(a.onDelete)}>
-              <IconTrash size={12} /> Delete field
-            </button>
-          )}
-          <button className="btn btn-sm" onClick={onClose}>
-            Close
-          </button>
+            {a.onEdit && (
+              <button className="btn btn-sm btn-primary" onClick={() => run(a.onEdit)}>
+                <IconPencil size={13} /> Edit value
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

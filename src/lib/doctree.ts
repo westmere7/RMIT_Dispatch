@@ -99,3 +99,13 @@ export function flattenDocTree<T>(
 export function canHaveChild(depth: number): boolean {
   return depth < MAX_ADAPTATION_DEPTH;
 }
+
+/** Human-readable document type based on kind and parent. */
+export function docTypeLabel(
+  kind: 'master' | 'adaptation',
+  parentDoc?: DispatchDocument | null,
+): 'Master' | 'Adaptation' | 'Sub-adaptation' {
+  if (kind === 'master') return 'Master';
+  if (parentDoc && parentDoc.kind === 'adaptation') return 'Sub-adaptation';
+  return 'Adaptation';
+}

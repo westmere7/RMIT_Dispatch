@@ -773,9 +773,33 @@ select.input {
 .fp-peek-actions {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.fp-peek-actions-secondary {
+  display: flex;
+  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 16px;
+}
+.fp-peek-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.fv-full.clickable-edit {
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.fv-full.clickable-edit:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
 }
 
 .fp-shape {

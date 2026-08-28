@@ -479,6 +479,53 @@ export function collectUpstream(pages: Page[], fields: FieldMap): UpstreamChange
   return { fields: [...fieldChanges.values()], blocks: blockChanges };
 }
 
+/**
+ * Propagate local field changes across the same document live.
+ * When an author edits a field embed in one block (e.g. text span or cell),
+ * this extracts any modified field values from the document (via collectUpstream)
+ * and updates all other following embeds of those fields across pages.
+ * The currently edited block (exemptBlockId) is preserved as authored to keep focus/cursor.
+ */
+export function propagateInDocumentFields(
+  pages: Page[],
+  baseFields: FieldMap,
+  exemptBlockId?: string | null,
+): { pages: Page[]; liveFields: FieldMap; changed: boolean } {
+  const upstream = collectUpstream(pages, baseFields);
+  if (upstream.fields.length === 0) {
+    return { pages, liveFields: baseFields, changed: false };
+  }
+
+  // Create an updated field map with the locally changed values overlaid
+  const liveFields = new Map(baseFields);
+  for (const f of upstream.fields) {
+    const existing = liveFields.get(f.fieldId);
+    if (existing) {
+      liveFields.set(f.fieldId, { ...existing, value: f.value });
+    }
+  }
+
+  let changed = false;
+  const nextPages = pages.map((page) => ({
+    ...page,
+    blocks: page.blocks.map((block) => {
+      if (exemptBlockId && block.id === exemptBlockId) {
+        return block;
+      }
+      // Apply the updated field values to this other block
+      const [synced] = applySyncDown([{ ...page, blocks: [block] }], liveFields);
+      const updated = synced.blocks[0];
+      if (JSON.stringify(updated) !== JSON.stringify(block)) {
+        changed = true;
+        return updated;
+      }
+      return block;
+    }),
+  }));
+
+  return { pages: changed ? nextPages : pages, liveFields, changed };
+}
+
 /* ============================================================
    Where-used + adaptation cloning helpers
    ============================================================ */

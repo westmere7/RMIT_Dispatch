@@ -4,6 +4,7 @@ import { useCrumbs } from '../components/AppShell';
 import {
   IconDispatch,
   IconImage,
+  IconLink,
   IconLock,
   IconPencil,
   IconType,
@@ -34,6 +35,7 @@ import {
   versionName,
   type DispatchTarget,
 } from '../lib/dispatch';
+import { docTypeLabel } from '../lib/doctree';
 import {
   applySyncDown,
   collectUpstream,
@@ -195,10 +197,9 @@ function WorkspaceLoaded(props: {
   const sendPatchRef = useRef<((patch: DraftPatch) => void) | null>(null);
   /** Images referenced at the last save, so removals can be collected. */
   const mediaRef = useRef<Set<string>>(new Set(pageMediaPaths(props.pages)));
-
-  // Initial pages resolved against current fields/master.
+  // Initial pages resolved against current fields.
   const initialPages = useMemo(
-    () => applySyncDown(props.pages, toFieldMap(props.fields), blockMap(props.masterPages) ?? undefined),
+    () => applySyncDown(props.pages, toFieldMap(props.fields)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -272,9 +273,9 @@ function WorkspaceLoaded(props: {
             label: `edit ${seq}`,
             pages,
           });
-          if (seq % 10 === 0) await pruneUndoHistory(doc.id, user.uid, settings.undoSteps);
-        } catch (e) {
-          console.warn('undo step not saved', (e as Error).message);
+          void pruneUndoHistory(doc.id, user.uid, settings.undoSteps);
+        } catch {
+          // Failure to mirror history locally shouldn't crash edits.
         }
       })();
     },
@@ -285,6 +286,7 @@ function WorkspaceLoaded(props: {
     <EditorProvider
       initialPages={initialPages}
       grid={doc.grid}
+      fields={fieldMap}
       readOnly={readOnly}
       onPersist={onPersist}
       onBroadcast={onBroadcast}
@@ -420,6 +422,10 @@ function WorkspaceInner({
   pagesRef.current = state.pages;
 
   useEffect(() => {
+    const docType = docTypeLabel(doc.kind, masterDoc);
+    const isMaster = docType === 'Master';
+    const isSub = docType === 'Sub-adaptation';
+
     setCrumbs([
       <Link key="p" to="/">
         Projects
@@ -427,9 +433,30 @@ function WorkspaceInner({
       <Link key="pr" to={`/projects/${project.id}`}>
         {project.title}
       </Link>,
-      doc.title,
+      <span key="d" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <span>{doc.title}</span>
+        <span
+          className={`pill ${isMaster ? 'pill-accent' : isSub ? '' : 'pill-primary'}`}
+          style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            letterSpacing: '0.02em',
+            padding: '2px 8px',
+            textTransform: 'none',
+            ...(isSub
+              ? {
+                  background: 'var(--surface-3)',
+                  color: 'var(--text-muted)',
+                  border: '1px solid var(--border)',
+                }
+              : {}),
+          }}
+        >
+          {docType}
+        </span>
+      </span>,
     ]);
-  }, [setCrumbs, project, doc.title]);
+  }, [setCrumbs, project, doc.title, doc.kind, masterDoc]);
 
   /* ---------- Realtime: document channel ---------- */
   useEffect(() => {
@@ -442,7 +469,7 @@ function WorkspaceInner({
         if (isHolderRef.current) return; // our own save echo
         dispatch({
           type: 'REMOTE_PAGES',
-          pages: applySyncDown(draft.pages, fieldMapRef.current, masterBlocksRef.current ?? undefined),
+          pages: applySyncDown(draft.pages, fieldMapRef.current),
         });
       },
       onDocumentRow: (d) => setDoc(d),
@@ -450,7 +477,7 @@ function WorkspaceInner({
         if (patch.by === user.uid) return;
         dispatch({
           type: 'REMOTE_PAGES',
-          pages: applySyncDown(patch.pages, fieldMapRef.current, masterBlocksRef.current ?? undefined),
+          pages: applySyncDown(patch.pages, fieldMapRef.current),
         });
       },
       onCommentEvent: (event, comment, oldId) => {
@@ -490,7 +517,7 @@ function WorkspaceInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, project.spaceId]);
 
-  /* ---------- Realtime: master draft (adaptations follow live) ---------- */
+  /* ---------- Realtime: master draft (for pending sync calculations) ---------- */
   useEffect(() => {
     if (!masterDoc) return;
     const unsub = subscribeDraft(masterDoc.id, (draft) => setMasterPages(draft.pages));
@@ -500,8 +527,8 @@ function WorkspaceInner({
 
   /* ---------- Downstream propagation into the open editor ---------- */
   useEffect(() => {
-    dispatch({ type: 'FIELDS_CHANGED', fields: fieldMap, masterBlocks: masterBlocks ?? undefined });
-  }, [fieldMap, masterBlocks, dispatch]);
+    dispatch({ type: 'FIELDS_CHANGED', fields: fieldMap });
+  }, [fieldMap, dispatch]);
 
   /* ---------- Lock heartbeat ---------- */
   useEffect(() => {
@@ -529,17 +556,43 @@ function WorkspaceInner({
     [state.pages, fieldMap, isLockHolder],
   );
 
-  const applyUpstream = useCallback(async () => {
+  /* ---------- Pending sync from master (for child adaptations) ---------- */
+  const pendingSyncFromMaster = useMemo(() => {
+    if (doc.kind !== 'adaptation' || !masterDoc || !masterBlocks) return 0;
+    const resolved = applySyncDown(state.pages, fieldMap, masterBlocks);
+    let count = 0;
+    for (let pi = 0; pi < state.pages.length; pi++) {
+      const curPage = state.pages[pi];
+      const resPage = resolved[pi];
+      if (!resPage) continue;
+      for (let bi = 0; bi < curPage.blocks.length; bi++) {
+        const curBlock = curPage.blocks[bi];
+        const resBlock = resPage.blocks[bi];
+        if (resBlock && JSON.stringify(curBlock) !== JSON.stringify(resBlock)) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }, [doc.kind, masterDoc, masterBlocks, state.pages, fieldMap]);
+
+  const applyUpstream = useCallback(async (specificFieldId?: string) => {
     if (!user) return;
     const changes = collectUpstream(pagesRef.current, fieldMapRef.current);
-    for (const fc of changes.fields) {
+    const targetFields = specificFieldId
+      ? changes.fields.filter((fc) => fc.fieldId === specificFieldId)
+      : changes.fields;
+    for (const fc of targetFields) {
       try {
         await updateFieldValue(fc.fieldId, fc.value, user.uid);
+        setFields((prev) =>
+          prev.map((f) => (f.id === fc.fieldId ? { ...f, value: fc.value, updatedBy: user.uid } : f)),
+        );
       } catch (e) {
         console.error('field upstream failed', e);
       }
     }
-    if (changes.blocks.length > 0 && masterDoc) {
+    if (!specificFieldId && changes.blocks.length > 0 && masterDoc) {
       try {
         const masterDraft = await fetchDraft(masterDoc.id);
         if (masterDraft) {
@@ -557,7 +610,7 @@ function WorkspaceInner({
         console.error('block upstream failed (master may be locked)', e);
       }
     }
-  }, [user, masterDoc]);
+  }, [user, masterDoc, setFields]);
 
   const saveNow = useCallback(async () => {
     await flush();
@@ -759,6 +812,7 @@ function WorkspaceInner({
     activeCell,
     setActiveCell,
     saveNow,
+    applyUpstream,
     versionsKey: versionsKey,
   };
 
@@ -825,6 +879,31 @@ function WorkspaceInner({
               >
                 {pendingUpstream.fields.length + pendingUpstream.blocks.length} pending upstream ↑
               </span>
+            )}
+
+            {pendingSyncFromMaster > 0 && (
+              <span
+                className="pill pill-accent"
+                title="Master has changes pending dispatch. Run Dispatch from the master or sync to apply them."
+              >
+                <IconLink size={11} /> {pendingSyncFromMaster} pending sync from master ↓
+              </span>
+            )}
+
+            {pendingSyncFromMaster > 0 && isLockHolder && masterBlocks && (
+              <button
+                className="btn btn-sm btn-ghost"
+                title="Pull and apply latest changes from master"
+                onClick={() => {
+                  dispatch({
+                    type: 'FIELDS_CHANGED',
+                    fields: fieldMap,
+                    masterBlocks,
+                  });
+                }}
+              >
+                Sync now ↓
+              </button>
             )}
 
             <div className="presence-stack" style={{ marginLeft: 'auto' }} title="Currently here">

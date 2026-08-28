@@ -56,6 +56,7 @@ export interface WorkspaceCtx {
   activeCell: ActiveCell | null;
   setActiveCell: (c: ActiveCell | null) => void;
   saveNow: () => Promise<void>;
+  applyUpstream: (specificFieldId?: string) => Promise<void>;
   versionsKey: number;
 }
 

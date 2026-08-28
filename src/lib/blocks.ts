@@ -66,7 +66,16 @@ export function createBlock(
   type: BlockType,
   page: Page,
   grid: GridConfig,
-  opts: { shape?: ShapeKind; body?: RichText; table?: TableSpec } = {},
+  opts: {
+    shape?: ShapeKind;
+    body?: RichText;
+    table?: TableSpec | { headerRow: boolean; rows: RichText[][] };
+    storagePath?: string;
+    alt?: string;
+    caption?: string;
+    fit?: 'contain' | 'cover';
+    binding?: Block['binding'];
+  } = {},
 ): Block {
   const cols = effectiveColumns(grid, page.kind);
   const rows = grid.rows;
@@ -88,6 +97,7 @@ export function createBlock(
         body: opts.body ?? richFromText('New text block'),
         size: 'md',
         align: 'left',
+        binding: opts.binding,
       };
     case 'shape':
       return {
@@ -100,9 +110,17 @@ export function createBlock(
         strokeWidth: 2,
       };
     case 'table': {
-      // The author chose the shape before inserting, so an empty grid of
-      // exactly that size beats a two-by-two they then have to rebuild.
-      const spec = opts.table ?? DEFAULT_TABLE;
+      if (opts.table && 'rows' in opts.table && Array.isArray(opts.table.rows)) {
+        return {
+          id,
+          type,
+          pos,
+          headerRow: opts.table.headerRow,
+          rows: opts.table.rows.map((row) => row.map((cell) => cell)),
+          binding: opts.binding,
+        };
+      }
+      const spec = (opts.table as TableSpec) ?? DEFAULT_TABLE;
       const nCols = Math.max(1, Math.min(MAX_TABLE, spec.cols));
       const nRows = Math.max(1, Math.min(MAX_TABLE, spec.rows));
       return {
@@ -115,10 +133,20 @@ export function createBlock(
             r === 0 && spec.headerRow ? richFromText(`Column ${c + 1}`) : emptyRich(),
           ),
         ),
+        binding: opts.binding,
       };
     }
     case 'image':
-      return { id, type, pos, fit: 'cover' };
+      return {
+        id,
+        type,
+        pos,
+        fit: opts.fit ?? 'cover',
+        storagePath: opts.storagePath,
+        alt: opts.alt,
+        caption: opts.caption,
+        binding: opts.binding,
+      };
   }
 }
 

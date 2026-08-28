@@ -443,8 +443,11 @@ src/
   ones inside tables. `storagePath` is optional for that reason: a `down`
   binding supplies it. Unlinking keeps the file as a plain copy, and deleting
   a bound picture must NOT delete the file, which belongs to the field.
-- **The table's controls get their own bar row** under the text row. Crowded
-  into one row they pushed the formatting buttons off the end.
+- **The table's controls get their own bar row** floating under the text row.
+  Crowded into one row they pushed the formatting buttons off the end; rendered
+  as a floating overlay (`position: absolute; top: 100%`) under `.properties-stack`,
+  it keeps the in-flow properties bar height strictly constant (42px) so selecting
+  a table never resizes the stage, recalculates `fitWidth`, or shifts the canvas view.
 - **A new table is built to order** (`NewTablePanel`): rows, columns and the
   header are chosen before the block exists. Reshaping afterwards means
   keeping merges, bindings and track sizes in step for edits the author only
