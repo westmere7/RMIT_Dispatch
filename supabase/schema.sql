@@ -471,3 +471,39 @@ drop policy if exists "media delete" on storage.objects;
 create policy "media delete" on storage.objects
   for delete to authenticated
   using (bucket_id = 'media' and owner = auth.uid());
+
+-- ---------- Publication Shares ----------
+create table if not exists public.shares (
+  id              uuid primary key default gen_random_uuid(),
+  token           text unique not null default encode(gen_random_bytes(16), 'hex'),
+  document_id     uuid not null references public.documents (id) on delete cascade,
+  version_id      uuid references public.versions (id) on delete set null,
+  version_number  integer,
+  created_by      uuid not null references public.profiles (uid),
+  created_at      timestamptz not null default now(),
+  expires_at      timestamptz,
+  require_login   boolean not null default false,
+  allow_copy      boolean not null default true
+);
+
+alter table public.shares enable row level security;
+
+drop policy if exists "Space members can manage shares" on public.shares;
+create policy "Space members can manage shares"
+  on public.shares
+  for all
+  using (
+    exists (
+      select 1 from public.documents d
+      join public.projects p on p.id = d.project_id
+      join public.space_members sm on sm.space_id = p.space_id
+      where d.id = shares.document_id and sm.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "Public can read active shares" on public.shares;
+create policy "Public can read active shares"
+  on public.shares
+  for select
+  using (expires_at is null or expires_at > now());
+

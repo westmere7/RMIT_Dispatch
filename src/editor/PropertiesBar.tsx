@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FieldMenu } from '../components/editor/FieldMenu';
 import { TableBar } from '../components/editor/TableBar';
 import {
-  ImageProps,
   SIZES,
   ShapeProps,
   activeEditorRoot,
@@ -25,7 +24,18 @@ import {
   IconTrash,
   IconType,
   IconUnlink,
+  IconUpload,
+  IconSettings,
+  IconLoader,
 } from '../components/Icons';
+import { useDialog } from '../components/Dialog';
+import { useSpaces } from '../store/spaces';
+import { uploadMedia, deleteMedia } from '../store/media';
+import {
+  COMPRESSION_LEVELS,
+  DEFAULT_COMPRESSION,
+  type CompressionLevel,
+} from '../lib/imagecompress';
 import { FieldPicker } from '../components/editor/FieldPicker';
 import { blockTarget, type FieldTarget } from '../lib/fieldtypes';
 import { rangeFromSelection, restoreSelectionSoon } from '../lib/richdom';
@@ -42,7 +52,7 @@ import {
   type MarkPatch,
   type TextRange,
 } from '../lib/richtext';
-import type { Block, RichText, TableBlock, TextAlign, TextSize } from '../types';
+import type { Block, ImageBlock, RichText, TableBlock, TextAlign, TextSize } from '../types';
 import { useEditor } from './EditorProvider';
 import { useFieldOps } from './useFieldOps';
 import { useWorkspace } from './workspaceContext';
@@ -280,25 +290,7 @@ function SingleControls({
       )}
 
       {block.type === 'image' && (
-        <>
-          <span className="bar-sep" />
-          <div className="segmented" style={{ padding: 2 }}>
-            {(['cover', 'contain'] as const).map((f) => (
-              <button
-                key={f}
-                className={(block.fit ?? 'cover') === f ? 'active' : ''}
-                style={{ height: 22, padding: '0 8px', fontSize: 11 }}
-                disabled={readOnly}
-                onClick={() => update({ fit: f } as Partial<Block>)}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
-          <BarPopover label="Image" icon={<IconImage size={12} />} wide>
-            <ImageProps block={block} update={update} />
-          </BarPopover>
-        </>
+        <ImageBarControls block={block} update={update} readOnly={readOnly} />
       )}
 
       {block.type === 'shape' && (
@@ -698,6 +690,164 @@ function TextControls({
           </button>
         )
       )}
+    </>
+  );
+}
+
+function ImageBarControls({
+  block,
+  update,
+  readOnly,
+}: {
+  block: ImageBlock;
+  update: (p: Partial<Block>) => void;
+  readOnly: boolean;
+}) {
+  const { currentSpace } = useSpaces();
+  const dialog = useDialog();
+  const [uploading, setUploading] = useState(false);
+  const [level, setLevel] = useState<CompressionLevel>(DEFAULT_COMPRESSION);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const ownsImage = !block.binding?.fieldId;
+
+  const onFile = async (file: File) => {
+    if (!currentSpace) return;
+    setUploading(true);
+    try {
+      const previous = block.storagePath;
+      const res = await uploadMedia(currentSpace.id, file, level);
+      update({ storagePath: res.storagePath } as Partial<Block>);
+      if (previous && ownsImage) await deleteMedia(previous);
+    } catch (e) {
+      console.error(e);
+      await dialog.alert('Upload failed', {
+        message: (e as Error).message || 'Check that the `media` storage bucket exists.',
+      });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeImage = async () => {
+    const ok = await dialog.confirm('Remove this image?', {
+      message: ownsImage
+        ? 'The file is deleted from storage as well.'
+        : 'This block follows a field, so only the local copy is cleared.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    const previous = block.storagePath;
+    update({ storagePath: undefined } as Partial<Block>);
+    if (ownsImage) await deleteMedia(previous);
+  };
+
+  return (
+    <>
+      <span className="bar-sep" />
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void onFile(f);
+          e.target.value = '';
+        }}
+      />
+
+      <button
+        type="button"
+        className={`btn btn-sm ${!block.storagePath ? 'btn-primary' : ''}`}
+        style={{ gap: 5 }}
+        disabled={readOnly || uploading}
+        onClick={() => fileRef.current?.click()}
+        title={block.storagePath ? 'Replace image with a different file' : 'Upload image from your computer'}
+      >
+        {uploading ? <IconLoader size={13} /> : <IconUpload size={13} />}
+        {uploading ? 'Compressing & uploading…' : block.storagePath ? 'Replace image' : 'Upload image'}
+      </button>
+
+      {block.storagePath && (
+        <>
+          <div className="segmented" style={{ padding: 2 }}>
+            {(['cover', 'contain'] as const).map((f) => (
+              <button
+                key={f}
+                className={(block.fit ?? 'cover') === f ? 'active' : ''}
+                style={{ height: 22, padding: '0 8px', fontSize: 11 }}
+                disabled={readOnly}
+                onClick={() => update({ fit: f } as Partial<Block>)}
+                title={`Fit (${f})`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            style={{ gap: 4, color: 'var(--danger)' }}
+            disabled={readOnly || uploading}
+            onClick={() => void removeImage()}
+            title="Remove image from block"
+          >
+            <IconTrash size={12} /> Remove
+          </button>
+        </>
+      )}
+
+      <BarPopover label="Options" icon={<IconSettings size={12} />} wide>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="field">
+            <label htmlFor="img-cmp-bar" style={{ fontSize: 12 }}>Compression</label>
+            <select
+              id="img-cmp-bar"
+              className="input"
+              style={{ fontSize: 12 }}
+              value={level}
+              disabled={readOnly}
+              onChange={(e) => setLevel(e.target.value as CompressionLevel)}
+            >
+              {COMPRESSION_LEVELS.map((l) => (
+                <option key={l.key} value={l.key}>
+                  {l.label} — {l.hint}
+                </option>
+              ))}
+            </select>
+            <span className="muted text-xs">
+              Applied on the next upload; images are stored as WebP unless you pick Original.
+            </span>
+          </div>
+
+          <div className="field">
+            <label style={{ fontSize: 12 }}>Alt text</label>
+            <input
+              className="input"
+              style={{ fontSize: 12 }}
+              disabled={readOnly}
+              value={block.alt ?? ''}
+              onChange={(e) => update({ alt: e.target.value || undefined } as Partial<Block>)}
+              placeholder="Descriptive text for accessibility"
+            />
+          </div>
+
+          <div className="field">
+            <label style={{ fontSize: 12 }}>Caption</label>
+            <input
+              className="input"
+              style={{ fontSize: 12 }}
+              disabled={readOnly}
+              value={block.caption ?? ''}
+              onChange={(e) => update({ caption: e.target.value || undefined } as Partial<Block>)}
+              placeholder="Caption displayed below image"
+            />
+          </div>
+        </div>
+      </BarPopover>
     </>
   );
 }

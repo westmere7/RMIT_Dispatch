@@ -10,6 +10,7 @@ import {
   IconMessage,
   IconPlus,
   IconSettings,
+  IconShare,
   IconTrash,
   IconUnlink,
 } from '../components/Icons';
@@ -18,6 +19,7 @@ import {
   type DocumentSettingsValues,
 } from '../components/DocumentSettingsPanel';
 import { DispatchPanel, type DispatchArgs } from '../components/DispatchPanel';
+import { ShareModal } from '../components/ShareModal';
 import { NewAdaptationPanel } from '../components/NewAdaptationPanel';
 import { canvasAspect, effectiveColumns } from '../grid/presets';
 import { clampPos, rescalePages } from '../lib/blocks';
@@ -97,6 +99,8 @@ export function ProjectView() {
   const [newParent, setNewParent] = useState<DispatchDocument | null>(null);
   /** Document whose settings panel is open. */
   const [settingsFor, setSettingsFor] = useState<DispatchDocument | null>(null);
+  /** Document whose share dialog is open. */
+  const [shareFor, setShareFor] = useState<DispatchDocument | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   /** Document a dispatch is being composed from, and what it will reach. */
@@ -529,6 +533,15 @@ export function ProjectView() {
                       <span>{comments.get(doc.id)?.total ?? 0}</span>
                     </button>
 
+                    <button
+                      className="icon-btn"
+                      title={`Share ${doc.title}`}
+                      aria-label={`Share ${doc.title}`}
+                      onClick={() => setShareFor(doc)}
+                    >
+                      <IconShare size={14} />
+                    </button>
+
                     {canEdit ? (
                       <>
                         <button
@@ -620,6 +633,10 @@ export function ProjectView() {
           onClose={() => !dispatchBusy && setDispatchFrom(null)}
           busy={dispatchBusy}
         />
+      )}
+
+      {shareFor && (
+        <ShareModal doc={shareFor} onClose={() => setShareFor(null)} />
       )}
 
       {newParent && (

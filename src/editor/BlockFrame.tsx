@@ -4,7 +4,8 @@ import { BlockView } from '../components/editor/BlockView';
 import { InlineTableEditor } from '../components/editor/InlineTableEditor';
 import { InlineTextEditor, type InlineEditorHandle } from '../components/editor/InlineTextEditor';
 import { isContentLocked } from '../lib/syncfields';
-import type { Block } from '../types';
+import { uploadMedia, deleteMedia } from '../store/media';
+import type { Block, ImageBlock } from '../types';
 import { TableOverlay } from './TableOverlay';
 import type { ResizeCorner } from './useDragResize';
 import { useWorkspaceOptional } from './workspaceContext';
@@ -108,12 +109,32 @@ export function BlockFrame({
   const ws = useWorkspaceOptional();
 
   const innerRef = useRef<HTMLDivElement>(null);
+  const imgInputRef = useRef<HTMLInputElement>(null);
   const textOverflow = useTextOverflow(innerRef, isText, block);
 
   // Focus the inline editor when an edit session opens.
   useEffect(() => {
     if (editing) editorRef?.current?.focus();
   }, [editing, editorRef]);
+
+  const [uploading, setUploading] = useState(false);
+
+  const onImgFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f || !ws?.project.spaceId) return;
+    e.target.value = '';
+    setUploading(true);
+    try {
+      const previous = (block as ImageBlock).storagePath;
+      const res = await uploadMedia(ws.project.spaceId, f);
+      onContentChange?.(block.id, { storagePath: res.storagePath } as Partial<Block>);
+      if (previous && !block.binding?.fieldId) await deleteMedia(previous);
+    } catch (err) {
+      console.error('Image upload failed', err);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleClick = (e: ReactMouseEvent) => {
     // A click on a table cell selects it, so the settings panel and the
@@ -158,10 +179,17 @@ export function BlockFrame({
         onPointerDown(e, block.id);
       }}
       onDoubleClick={(e) => {
+        if (!editable) return;
+        if (block.type === 'image') {
+          e.stopPropagation();
+          imgInputRef.current?.click();
+          return;
+        }
         // Text blocks and tables open for inline editing on double click
-        if (!editable || (!isText && !isTable)) return;
-        e.stopPropagation();
-        onStartEdit?.(block.id);
+        if (isText || isTable) {
+          e.stopPropagation();
+          onStartEdit?.(block.id);
+        }
       }}
       onClick={handleClick}
       onContextMenu={(e) => {
@@ -175,6 +203,39 @@ export function BlockFrame({
       }}
       data-block-id={block.id}
     >
+      {block.type === 'image' && editable && (
+        <input
+          ref={imgInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={(e) => void onImgFile(e)}
+        />
+      )}
+      {uploading && (
+        <div
+          className="image-uploading-overlay"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(15, 23, 42, 0.75)',
+            backdropFilter: 'blur(2px)',
+            gap: 8,
+            color: '#fff',
+            fontSize: 'var(--fs-xs)',
+            fontWeight: 500,
+            borderRadius: 'inherit',
+          }}
+        >
+          <div className="spinner" style={{ width: 20, height: 20, borderTopColor: '#fff' }} />
+          <span>Uploading image…</span>
+        </div>
+      )}
       {/* Illustrator's overflow marker: the copy does not fit its box. */}
       {textOverflow && (
         <span
@@ -222,9 +283,14 @@ export function BlockFrame({
         <TableOverlay block={block} pageId={pageId} frameRef={innerRef} />
       )}
 
-      {selected && editable && !editing && (isTable || isText) && (
-        <span className="edit-hint">double-click to edit</span>
-      )}
+      {selected &&
+        editable &&
+        !editing &&
+        (isTable || isText || (block.type === 'image' && Boolean((block as ImageBlock).storagePath))) && (
+          <span className="edit-hint">
+            {block.type === 'image' ? 'double-click to replace' : 'double-click to edit'}
+          </span>
+        )}
 
       {selected &&
         editable &&

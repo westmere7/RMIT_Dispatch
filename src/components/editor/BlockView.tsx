@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { IconImage } from '../Icons';
 import { mediaUrl } from '../../lib/supabase';
 import {
@@ -13,6 +13,7 @@ import {
 import { runFontSize } from '../../lib/textsize';
 import type {
   Block,
+  ImageBlock,
   InlineNode,
   RichText,
   ShapeBlock,
@@ -184,20 +185,61 @@ export function BlockView({ block }: { block: Block }) {
 
   if (block.type === 'shape') return <ShapeView block={block} />;
 
-  // image
+  if (block.type === 'image') return <ImageView block={block} />;
+
+  return null;
+}
+
+function ImageView({ block }: { block: ImageBlock }) {
+  const [loading, setLoading] = useState(Boolean(block.storagePath));
+
+  useEffect(() => {
+    setLoading(Boolean(block.storagePath));
+  }, [block.storagePath]);
+
   return (
-    <figure className="block-image" style={{ margin: 0 }}>
+    <figure className="block-image" style={{ margin: 0, position: 'relative', width: '100%', height: '100%' }}>
       {block.storagePath ? (
-        <img
-          src={mediaUrl(block.storagePath)}
-          alt={block.alt ?? ''}
-          style={{ objectFit: block.fit ?? 'cover' }}
-          draggable={false}
-        />
+        <>
+          <img
+            src={mediaUrl(block.storagePath)}
+            alt={block.alt ?? ''}
+            style={{
+              objectFit: block.fit ?? 'cover',
+              opacity: loading ? 0 : 1,
+              transition: 'opacity 0.2s ease',
+            }}
+            draggable={false}
+            onLoad={() => setLoading(false)}
+            onError={() => setLoading(false)}
+          />
+          {loading && (
+            <div
+              className="image-loading-overlay"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'var(--surface-2)',
+                gap: 8,
+                color: 'var(--text-muted)',
+                fontSize: 'var(--fs-xs)',
+              }}
+            >
+              <div className="spinner" style={{ width: 16, height: 16 }} />
+              <span>Loading image…</span>
+            </div>
+          )}
+        </>
       ) : (
-        <div className="placeholder">
+        <div className="placeholder" title="Double-click to select / replace image">
           <IconImage size={16} />
-          No image
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+            <span>No image</span>
+            <span style={{ fontSize: '0.82em', opacity: 0.7 }}>Double-click to select</span>
+          </div>
         </div>
       )}
       {block.caption && <figcaption>{block.caption}</figcaption>}

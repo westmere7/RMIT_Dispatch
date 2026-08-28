@@ -7,11 +7,13 @@ import {
   IconLink,
   IconLock,
   IconPencil,
+  IconShare,
   IconType,
   IconUnlock,
 } from '../components/Icons';
 import { useDialog } from '../components/Dialog';
 import { DispatchPanel, type DispatchArgs } from '../components/DispatchPanel';
+import { ShareModal } from '../components/ShareModal';
 import { BlockInspector } from '../components/editor/BlockInspector';
 import { PageRail } from '../components/editor/PageRail';
 import {
@@ -382,6 +384,7 @@ function WorkspaceInner({
   const { setCrumbs } = useCrumbs();
   const navigate = useNavigate();
   const { state, dispatch, flush, isDirty, undo, redo } = useEditor();
+  const [shareOpen, setShareOpen] = useState(false);
 
   // Seed the undo stack once the cloud history has loaded.
   useEffect(() => {
@@ -912,6 +915,16 @@ function WorkspaceInner({
               ))}
             </div>
 
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              style={{ gap: 5 }}
+              onClick={() => setShareOpen(true)}
+              title="Share publication preview link"
+            >
+              <IconShare size={13} /> Share
+            </button>
+
             {canEdit && isLockHolder && (
               <>
                 <button className="btn btn-sm" onClick={() => void stopEditing()}>
@@ -927,6 +940,10 @@ function WorkspaceInner({
         </div>
         <BlockInspector />
       </div>
+
+      {shareOpen && (
+        <ShareModal doc={doc} onClose={() => setShareOpen(false)} />
+      )}
 
       {dispatchOpen && (
         <DispatchPanel
