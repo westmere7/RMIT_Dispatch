@@ -103,7 +103,6 @@ export function BlockFrame({
   const syncedDown = editable && isContentLocked(block.binding);
   const glyph = dir === 'down' ? '↓' : dir === 'up' ? '↑' : dir === 'two-way' ? '⇅' : '';
   const isText = block.type === 'text';
-  const bodyLocked = syncedDown;
 
   const isTable = block.type === 'table';
   const ws = useWorkspaceOptional();
@@ -159,10 +158,8 @@ export function BlockFrame({
         onPointerDown(e, block.id);
       }}
       onDoubleClick={(e) => {
-        // A table opens for editing the same way a text block does; its
-        // per-cell locks are decided cell by cell inside the editor.
+        // Text blocks and tables open for inline editing on double click
         if (!editable || (!isText && !isTable)) return;
-        if (isText && bodyLocked) return;
         e.stopPropagation();
         onStartEdit?.(block.id);
       }}
@@ -225,7 +222,7 @@ export function BlockFrame({
         <TableOverlay block={block} pageId={pageId} frameRef={innerRef} />
       )}
 
-      {selected && editable && !editing && (isTable || (isText && !bodyLocked)) && (
+      {selected && editable && !editing && (isTable || isText) && (
         <span className="edit-hint">double-click to edit</span>
       )}
 

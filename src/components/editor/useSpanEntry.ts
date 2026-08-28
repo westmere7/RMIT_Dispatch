@@ -25,15 +25,11 @@ export interface SpanEntry {
   onMouseDown: (e: ReactMouseEvent) => void;
 }
 
-export function useSpanEntry(
-  rootRef: React.RefObject<HTMLElement>,
-  opts: { onBlocked?: (fieldId: string) => void } = {},
-): SpanEntry {
+export function useSpanEntry(rootRef: React.RefObject<HTMLElement>): SpanEntry {
   const [entered, setEntered] = useState<EnteredSpan | null>(null);
   const [enteredField, setEnteredField] = useState<string | null>(null);
   /** Set when we have just stepped in, so the caret lands inside it. */
   const focusWanted = useRef(false);
-  const onBlocked = opts.onBlocked;
 
   const leave = useCallback(() => {
     setEntered(null);
@@ -185,12 +181,6 @@ export function useSpanEntry(
         return;
       }
       const fieldId = el.getAttribute('data-field') ?? '';
-      // `down` embeds mirror the field: their text cannot be edited in
-      // place, so stepping in would promise something we cannot deliver.
-      if (el.getAttribute('data-dir') === 'down') {
-        onBlocked?.(fieldId);
-        return;
-      }
       e.stopPropagation();
       focusWanted.current = true;
       setEntered({
@@ -199,7 +189,7 @@ export function useSpanEntry(
       });
       setEnteredField(fieldId);
     },
-    [rootRef, leave, onBlocked],
+    [rootRef, leave],
   );
 
   /**

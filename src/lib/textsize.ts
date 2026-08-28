@@ -24,14 +24,14 @@ export const SIZE_LABEL: Record<TextSize, string> = {
 };
 
 export const SIZE_EM: Record<TextSize, number> = {
-  // Smaller than the old bottom of the scale, for fine print.
-  xxs: 0.5,
-  xs: 0.65,
-  sm: 0.8,
-  md: 1,
-  lg: 1.35,
-  xl: 1.8,
-  xxl: 2.4,
+  // 50% smaller scale across the range for fine-tuned layout control
+  xxs: 0.25,
+  xs: 0.325,
+  sm: 0.4,
+  md: 0.5,
+  lg: 0.675,
+  xl: 0.9,
+  xxl: 1.2,
 };
 
 /**

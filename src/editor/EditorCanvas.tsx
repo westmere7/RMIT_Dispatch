@@ -11,7 +11,6 @@ import { FieldEditorDialog } from '../components/editor/FieldEditorDialog';
 import { NewTablePanel } from '../components/editor/NewTablePanel';
 import type { InlineEditorHandle } from '../components/editor/InlineTextEditor';
 import { canvasAspect } from '../grid/presets';
-import { isContentLocked } from '../lib/syncfields';
 import { useSize } from '../lib/useSize';
 import type { Block, SyncField } from '../types';
 import type { SpanClickInfo } from './BlockFrame';
@@ -94,7 +93,7 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
       // Enter opens inline text editing for a single selected text block.
       if (e.key === 'Enter' && sel.length === 1) {
         const b = page.blocks.find((x) => x.id === sel[0]);
-        if (b?.type === 'text' && !isContentLocked(b.binding)) {
+        if (b?.type === 'text') {
           e.preventDefault();
           dispatch({ type: 'EDIT_TEXT', blockId: b.id });
         }

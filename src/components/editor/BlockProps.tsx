@@ -13,7 +13,6 @@ import {
   richHasMark,
   type TextRange,
 } from '../../lib/richtext';
-import { isContentLocked } from '../../lib/syncfields';
 import { deleteMedia, uploadMedia } from '../../store/media';
 import {
   COMPRESSION_LEVELS,
@@ -273,8 +272,7 @@ export function TextProps({ block, update }: { block: TextBlock; update: (p: Par
     const range = liveRangeFor(block.id, editorRef.current?.getRange());
     return (range ? rangeSize(block.body, range) : null) ?? block.size ?? 'md';
   };
-  const boundDown = isContentLocked(block.binding);
-  const locked = readOnly || boundDown;
+  const locked = readOnly;
 
   return (
     <>
@@ -282,12 +280,6 @@ export function TextProps({ block, update }: { block: TextBlock; update: (p: Par
           bigger or bolder, so the formatting controls cover it. */}
       <div className="field">
         <label>Text</label>
-        {boundDown && (
-          <p className="muted text-xs" style={{ marginBottom: 4 }}>
-            This block follows {block.binding?.fieldId ? 'a sync field' : 'the master'} (↓). Unlink
-            it in the Sync tab to edit.
-          </p>
-        )}
         <RichTextBody block={block} update={update} editorRef={editorRef} locked={locked} />
       </div>
 

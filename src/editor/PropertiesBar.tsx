@@ -30,7 +30,6 @@ import { FieldPicker } from '../components/editor/FieldPicker';
 import { blockTarget, type FieldTarget } from '../lib/fieldtypes';
 import { rangeFromSelection, restoreSelectionSoon } from '../lib/richdom';
 import { emptyRich } from '../lib/richtext';
-import { isContentLocked } from '../lib/syncfields';
 import { cellFormatAt, cellsIn, setCellContent, setCellFormat, tableSize } from '../lib/tables';
 import { SIZE_LABEL } from '../lib/textsize';
 import {
@@ -259,7 +258,7 @@ function SingleControls({
           blockId={block.id}
           rich={block.body}
           setRich={(body) => update({ body } as Partial<Block>)}
-          locked={readOnly || isContentLocked(block.binding)}
+          locked={readOnly}
           size={block.size}
           setSize={(size, cleared) => update({ size, body: cleared } as Partial<Block>)}
           align={block.align}
@@ -440,14 +439,13 @@ function TableTextControls({
 
   const rich = block.rows[r]?.[c] ?? emptyRich();
   const fmt = cellFormatAt(block, r, c);
-  const cellBinding = block.cellBindings?.find((b) => b.row === r && b.col === c);
 
   return (
     <TextControls
       blockId={block.id}
       rich={rich}
       setRich={(next) => update({ rows: setCellContent(block, r, c, next) } as Partial<Block>)}
-      locked={readOnly || isContentLocked(block.binding) || isContentLocked(cellBinding)}
+      locked={readOnly}
       // A field embedded here belongs to this cell, not to running text.
       fieldTarget="tableCell"
       size={fmt?.size}

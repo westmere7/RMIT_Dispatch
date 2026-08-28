@@ -1,7 +1,7 @@
 import { useEditor } from '../../editor/EditorProvider';
 import { useDialog } from '../Dialog';
 import { GridPreview } from '../GridPreview';
-import { IconPlus, IconTrash } from '../Icons';
+import { IconSinglePage, IconSpread, IconTrash } from '../Icons';
 
 export function PageRail() {
   const { state, dispatch, readOnly } = useEditor();
@@ -27,12 +27,20 @@ export function PageRail() {
                   {i + 1} · {page.kind === 'spread' ? 'Spread' : 'Page'}
                 </span>
                 {!readOnly && (
-                  <span style={{ display: 'inline-flex', gap: 2 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <span
                       role="button"
                       tabIndex={0}
-                      title={page.kind === 'spread' ? 'Make single page' : 'Make spread'}
-                      style={{ cursor: 'pointer', padding: '0 3px' }}
+                      title={page.kind === 'spread' ? 'Convert to single page' : 'Convert to two-page spread'}
+                      style={{
+                        cursor: 'pointer',
+                        padding: '1px 3px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: 3,
+                        color: 'var(--text-muted)',
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         dispatch({ type: 'TOGGLE_PAGE_KIND', pageId: page.id });
@@ -44,14 +52,26 @@ export function PageRail() {
                         }
                       }}
                     >
-                      {page.kind === 'spread' ? '⇥' : '⇹'}
+                      {page.kind === 'spread' ? (
+                        <IconSinglePage size={13} />
+                      ) : (
+                        <IconSpread size={13} />
+                      )}
                     </span>
                     {state.pages.length > 1 && (
                       <span
                         role="button"
                         tabIndex={0}
                         title="Delete page"
-                        style={{ cursor: 'pointer', padding: '0 3px' }}
+                        style={{
+                          cursor: 'pointer',
+                          padding: '1px 3px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderRadius: 3,
+                          color: 'var(--text-muted)',
+                        }}
                         onClick={async (e) => {
                           e.stopPropagation();
                           const ok = await dialog.confirm(`Delete page ${i + 1}?`, {
@@ -63,7 +83,7 @@ export function PageRail() {
                         }}
                         onKeyDown={(e) => e.key === 'Enter' && e.stopPropagation()}
                       >
-                        <IconTrash size={11} />
+                        <IconTrash size={12} />
                       </span>
                     )}
                   </span>
@@ -74,12 +94,22 @@ export function PageRail() {
         ))}
 
         {!readOnly && (
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button className="btn btn-sm" style={{ flex: 1 }} onClick={() => dispatch({ type: 'ADD_PAGE', kind: 'single' })}>
-              <IconPlus size={12} /> Page
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <button
+              className="btn btn-sm"
+              style={{ flex: 1, gap: 5, fontSize: '11px' }}
+              title="Add a single page"
+              onClick={() => dispatch({ type: 'ADD_PAGE', kind: 'single' })}
+            >
+              <IconSinglePage size={13} /> Page
             </button>
-            <button className="btn btn-sm" style={{ flex: 1 }} onClick={() => dispatch({ type: 'ADD_PAGE', kind: 'spread' })}>
-              <IconPlus size={12} /> Spread
+            <button
+              className="btn btn-sm"
+              style={{ flex: 1, gap: 5, fontSize: '11px' }}
+              title="Add a two-page spread"
+              onClick={() => dispatch({ type: 'ADD_PAGE', kind: 'spread' })}
+            >
+              <IconSpread size={13} /> Spread
             </button>
           </div>
         )}

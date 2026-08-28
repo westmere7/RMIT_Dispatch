@@ -68,14 +68,14 @@
   background-image:
     linear-gradient(to right, var(--border) 1px, transparent 1px),
     linear-gradient(to bottom, var(--border) 1px, transparent 1px);
-  opacity: 0.55;
+  opacity: 0.18;
 }
 
 .margin-guide {
   position: absolute;
   border: 1px dashed var(--border-strong);
   pointer-events: none;
-  opacity: 0.7;
+  opacity: 0.35;
 }
 
 .spine-guide {
@@ -85,7 +85,7 @@
   width: 0;
   border-left: 1px solid var(--border-strong);
   pointer-events: none;
-  opacity: 0.8;
+  opacity: 0.4;
 }
 
 /* ---------- Blocks ---------- */
@@ -230,32 +230,32 @@
      rendered width — that is what makes content scale with zoom. An
      absolute size here was invisible for text (every `size-*` class
      overrides it) but pinned TABLES at one size at every zoom level. */
-  font-size: 1em;
+  font-size: 0.5em;
   line-height: 1.45;
   overflow: hidden;
   word-break: break-word;
 }
 .block-content.size-xxs {
-  font-size: 0.5em;
+  font-size: 0.25em;
 }
 .block-content.size-xs {
-  font-size: 0.65em;
+  font-size: 0.325em;
 }
 .block-content.size-sm {
-  font-size: 0.8em;
+  font-size: 0.4em;
 }
 .block-content.size-md {
-  font-size: 1em;
+  font-size: 0.5em;
 }
 .block-content.size-lg {
-  font-size: 1.35em;
+  font-size: 0.675em;
 }
 .block-content.size-xl {
-  font-size: 1.8em;
+  font-size: 0.9em;
   line-height: 1.25;
 }
 .block-content.size-xxl {
-  font-size: 2.4em;
+  font-size: 1.2em;
   line-height: 1.15;
 }
 .block-content .block-heading {

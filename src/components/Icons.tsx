@@ -369,3 +369,14 @@ export const IconInfo = (p: P) => (
     <line x1="12" y1="8" x2="12.01" y2="8" />
   </I>
 );
+export const IconSinglePage = (p: P) => (
+  <I {...p}>
+    <rect x="5" y="3" width="14" height="18" rx="2" />
+  </I>
+);
+export const IconSpread = (p: P) => (
+  <I {...p}>
+    <rect x="2" y="4" width="9.5" height="16" rx="1.5" />
+    <rect x="12.5" y="4" width="9.5" height="16" rx="1.5" />
+  </I>
+);
