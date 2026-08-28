@@ -17,6 +17,25 @@ export interface ActiveSpan {
   path: number[];
 }
 
+/**
+ * The table cells the author is working on — one, or a rectangle when
+ * they shift-clicked to extend it (which is what merging acts on).
+ *
+ * It lives here rather than inside the settings panel because both ends
+ * need it: clicking a cell ON THE CANVAS is what selects it, and the
+ * panel is what styles it.
+ */
+export interface ActiveCell {
+  blockId: string;
+  row: number;
+  col: number;
+  /** Far corner of the selection; equal to row/col for a single cell. */
+  toRow: number;
+  toCol: number;
+  /** Which scope the settings panel is styling. Defaults to the cell. */
+  scope?: 'table' | 'col' | 'row' | 'cell';
+}
+
 export interface WorkspaceCtx {
   doc: DispatchDocument;
   project: Project;
@@ -34,6 +53,8 @@ export interface WorkspaceCtx {
   setTab: (t: InspectorTab) => void;
   activeSpan: ActiveSpan | null;
   setActiveSpan: (s: ActiveSpan | null) => void;
+  activeCell: ActiveCell | null;
+  setActiveCell: (c: ActiveCell | null) => void;
   saveNow: () => Promise<void>;
   versionsKey: number;
 }

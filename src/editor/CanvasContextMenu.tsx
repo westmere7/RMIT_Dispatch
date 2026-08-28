@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { ContextMenu, type MenuItem } from '../components/ContextMenu';
 import { useDialog } from '../components/Dialog';
 import {
+  IconArrowUpDown,
   IconCopy,
   IconImage,
   IconLink,
@@ -14,9 +15,15 @@ import {
   IconType,
   IconUnlink,
 } from '../components/Icons';
+import { activeEditorRoot } from '../components/editor/BlockProps';
 import { restoreSelectionSoon } from '../lib/richdom';
 import { SIZE_LABEL, TEXT_SIZES } from '../lib/textsize';
-import { blockTarget, fieldShapeLabel, partitionByFit } from '../lib/fieldtypes';
+import {
+  blockTarget,
+  fieldShapeLabel,
+  partitionByFit,
+  type FieldTarget,
+} from '../lib/fieldtypes';
 import { emptyRich, insertFieldAt } from '../lib/richtext';
 import {
   applyMark,
@@ -26,10 +33,21 @@ import {
   richHasMark,
   setSpanDirection,
   unlinkSpan,
+  wholeTextRange,
   type TextRange,
 } from '../lib/richtext';
-import { collectUsages, locateSpan, resolveFieldInline, valueAsRich } from '../lib/syncfields';
-import { deleteField as deleteFieldRow, renameField } from '../store/fields';
+import {
+  autoFieldName,
+  collectUsages,
+  isContentLocked,
+  locateSpan,
+  resolveFieldInline,
+  valueAsRich,
+} from '../lib/syncfields';
+import { setCellContent } from '../lib/tables';
+import { uuid } from '../lib/ids';
+import { useAuth } from '../store/auth';
+import { createField, deleteField as deleteFieldRow, renameField } from '../store/fields';
 import type {
   Block,
   RichText,
@@ -97,15 +115,26 @@ export function CanvasContextMenu({
   target,
   onClose,
   onEditField,
+  onInsertTable,
 }: {
   target: CanvasTarget;
   onClose: () => void;
   onEditField: (field: SyncField) => void;
+  /** Tables ask for their size first, which needs a panel the menu cannot host. */
+  onInsertTable?: () => void;
 }) {
   const { state, dispatch, readOnly, currentPage } = useEditor();
-  const { doc, masterDoc, fields, fieldMap, setFields, setActiveSpan, setTab } = useWorkspace();
-  const { bindRange, insertField, bindBlockToField, createFieldFromBlock, defaultDirection } =
-    useFieldOps();
+  const { doc, project, masterDoc, fields, fieldMap, setFields, setActiveSpan, setTab, activeCell } =
+    useWorkspace();
+  const {
+    bindRange,
+    insertField,
+    bindBlockToField,
+    createFieldFromBlock,
+    defaultDirection,
+    checkFit,
+  } = useFieldOps();
+  const { user } = useAuth();
   const dialog = useDialog();
   const navigate = useNavigate();
 
@@ -115,16 +144,50 @@ export function CanvasContextMenu({
     : null;
   const isText = block?.type === 'text';
   const blockBinding = block?.binding;
-  const bodyLocked = !!blockBinding && blockBinding.direction !== 'up';
 
   const patch = (p: Partial<Block>) => {
     if (!page || !block) return;
     dispatch({ type: 'UPDATE_BLOCK', pageId: page.id, blockId: block.id, patch: p });
   };
 
-  const getBodyRich = (): RichText | null => (block?.type === 'text' ? block.body : null);
+  /*
+   * Which text the field actions act on.
+   *
+   * A table has one body per CELL, so "make a field from this selection"
+   * has to know which one — otherwise the menu can only offer to sync
+   * the whole table, which is what it used to do. When the menu was
+   * opened on an existing span, that span's own cell wins over the
+   * selected one; otherwise it is the cell the author last clicked.
+   */
+  const spanLoc = block && target.fieldId ? locateSpan(block, target.fieldId) : null;
+  const cell =
+    block?.type === 'table'
+      ? spanLoc?.kind === 'cell'
+        ? { row: spanLoc.row ?? 0, col: spanLoc.col ?? 0 }
+        : {
+            row: activeCell?.blockId === block.id ? activeCell.row : 0,
+            col: activeCell?.blockId === block.id ? activeCell.col : 0,
+          }
+      : null;
+  const cellBinding =
+    block?.type === 'table' && cell
+      ? block.cellBindings?.find((b) => b.row === cell.row && b.col === cell.col)
+      : undefined;
+  const bodyLocked = isContentLocked(blockBinding) || isContentLocked(cellBinding);
 
-  const setBody = (rich: RichText) => patch({ body: rich } as Partial<Block>);
+  const getBodyRich = (): RichText | null => {
+    if (block?.type === 'text') return block.body;
+    if (block?.type === 'table' && cell) return block.rows[cell.row]?.[cell.col] ?? null;
+    return null;
+  };
+
+  const setBody = (rich: RichText) => {
+    if (block?.type === 'table' && cell) {
+      patch({ rows: setCellContent(block, cell.row, cell.col, rich) } as Partial<Block>);
+      return;
+    }
+    patch({ body: rich } as Partial<Block>);
+  };
 
 
   /**
@@ -153,8 +216,9 @@ export function CanvasContextMenu({
 
   const spanItems = (): MenuItem[] => {
     if (!target.fieldId || !block) return [];
-    const loc = locateSpan(block, target.fieldId);
-    if (!loc || loc.kind !== 'body') return [];
+    const loc = spanLoc;
+    // A span inside a table CELL gets the same actions as one in a body.
+    if (!loc) return [];
     const field = fieldMap.get(target.fieldId);
     const rich = getBodyRich();
     if (!rich) return [];
@@ -281,13 +345,128 @@ export function CanvasContextMenu({
       });
     }
 
-    items.push({ kind: 'separator' });
     return items;
   };
 
-  /* ---------- Text selection section ---------- */
+  /* ---------- Cell section ----------
+     A table syncs at three levels, and each one has to be reachable from
+     the thing it acts on:
 
-  const selectionItems = (): MenuItem[] => {
+       1. the whole table   — a table field, `block.binding`
+       2. one whole cell    — a cell binding, one cell only
+       3. the text or the picture inside a cell — an embed
+
+     A cell binding beats the table field for that cell: `applySyncDown`
+     lays the table field's rows down first and the cell bindings over
+     them, so the narrower claim wins. */
+
+  const cellItems = (): MenuItem[] => {
+    if (readOnly || block?.type !== 'table' || !cell) return [];
+    const sel = activeCell?.blockId === block.id ? activeCell : null;
+    const multi = !!sel && (sel.row !== sel.toRow || sel.col !== sel.toCol);
+    const items: MenuItem[] = [];
+    const label = `Cell R${cell.row + 1}C${cell.col + 1}`;
+
+    if (cellBinding) {
+      const cf = fieldMap.get(cellBinding.fieldId);
+      items.push({ kind: 'header', label, sub: `follows “${cf?.name ?? 'field'}”` });
+      items.push({
+        kind: 'submenu',
+        label: 'Cell sync direction',
+        icon: <IconArrowUpDown size={13} />,
+        items: DIRECTIONS.map((d) => ({
+          kind: 'item' as const,
+          label: d.label,
+          checked: cellBinding.direction === d.dir,
+          onSelect: () =>
+            patch({
+              cellBindings: (block.cellBindings ?? []).map((b) =>
+                b.row === cell.row && b.col === cell.col ? { ...b, direction: d.dir } : b,
+              ),
+            } as Partial<Block>),
+        })),
+      });
+      items.push({
+        kind: 'item',
+        label: 'Unlink this cell',
+        hint: 'keep copy',
+        icon: <IconUnlink size={13} />,
+        onSelect: () =>
+          patch({
+            cellBindings: (block.cellBindings ?? []).filter(
+              (b) => !(b.row === cell.row && b.col === cell.col),
+            ),
+          } as Partial<Block>),
+      });
+      return items;
+    }
+
+    // A cell field owns ONE cell's content, so a range has no meaning here.
+    if (multi) {
+      items.push({ kind: 'note', label: 'Select a single cell to sync it on its own.' });
+      return items;
+    }
+
+    const { fits, unfit } = partitionByFit(fields, 'tableCell');
+    const rich = block.rows[cell.row]?.[cell.col] ?? emptyRich();
+    items.push({
+      kind: 'item',
+      label: `Make ${label} a sync field`,
+      icon: <IconLink size={13} />,
+      onSelect: () => void bindCellToField(uuid(), true, rich),
+    });
+    items.push({
+      kind: 'submenu',
+      label: 'Bind this cell to existing field',
+      icon: <IconLink size={13} />,
+      disabled: fields.length === 0,
+      items: [
+        ...(fits.length
+          ? fieldItems(fits, (f) => void bindCellToField(f.id, false, rich))
+          : ([{ kind: 'note', label: 'No fields that fit one cell.' }] as MenuItem[])),
+        ...(unfit.length
+          ? ([{ kind: 'separator' }, { kind: 'note', label: 'Wrong shape for one cell' }] as MenuItem[])
+          : []),
+        ...fieldItems(unfit.map((u) => u.field), () => {}, true),
+      ],
+    });
+    return items;
+  };
+
+  /** Bind the selected cell, creating the field from its content first. */
+  const bindCellToField = async (fieldId: string, createNew: boolean, rich: RichText) => {
+    if (!block || block.type !== 'table' || !cell || !user) return;
+    if (!createNew) {
+      const f = fieldMap.get(fieldId);
+      if (!f || !(await checkFit(f, 'tableCell'))) return;
+    }
+    if (createNew) {
+      const name = autoFieldName(plainText(rich), new Set(fields.map((f) => f.name)));
+      const field = await createField({
+        id: fieldId,
+        projectId: doc.projectId,
+        spaceId: project.spaceId,
+        scope: 'local',
+        name,
+        value: { kind: 'richtext', rich },
+        userId: user.uid,
+      });
+      setFields((prev) => [...prev, field]);
+    }
+    patch({
+      cellBindings: [
+        ...(block.cellBindings ?? []).filter((b) => !(b.row === cell.row && b.col === cell.col)),
+        { row: cell.row, col: cell.col, fieldId, direction: defaultDirection },
+      ],
+    } as Partial<Block>);
+  };
+
+  /* ---------- Making a field from the selection ---------- */
+
+  const selectionSyncItems = (): MenuItem[] => {
+    // A cell is not running text: a table field cannot live in one, and
+    // the fit check has to say so.
+    const embedTarget: FieldTarget = block?.type === 'table' ? 'tableCell' : 'inline';
     const rich = getBodyRich();
     // Shapes hold no content: no field actions apply.
     if (readOnly || !rich || bodyLocked || block?.type === 'shape') return [];
@@ -299,42 +478,56 @@ export function CanvasContextMenu({
       const len = plainText([rich[last] ?? []]).length;
       return { para: last, start: len, end: len };
     };
+    // Selecting the block and selecting its text are the same intent.
+    const bindTarget = hasSel ? range : wholeTextRange(rich);
 
     const items: MenuItem[] = [];
 
     // Only offer a top-level field bind when not already inside a span
     // (inside one, "Narrow" above is the right action).
     if (!target.fieldId) {
-      const { fits, unfit } = partitionByFit(fields, 'inline');
+      const { fits, unfit } = partitionByFit(fields, embedTarget);
       items.push({
         kind: 'submenu',
-        label: 'Make sync field',
+        label: hasSel ? 'Make sync field' : 'Make this text a sync field',
         icon: <IconLink size={13} />,
-        disabled: !hasSel,
-        items: [
-          {
-            kind: 'item',
-            label: `＋ New field (${defaultDirection})`,
-            onSelect: () => {
-              void bindRange(rich, range).then((next) => next && setBody(next));
-            },
-          },
-          ...(fits.length ? ([{ kind: 'separator' }] as MenuItem[]) : []),
-          ...fieldItems(fits, (f) => {
-            void bindRange(rich, range, { fieldId: f.id }).then((next) => next && setBody(next));
-          }),
-          ...(unfit.length
-            ? ([{ kind: 'separator' }, { kind: 'note', label: 'Not usable inline' }] as MenuItem[])
-            : []),
-          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
-        ],
+        items: bindTarget
+          ? [
+              {
+                kind: 'item',
+                label: `＋ New field (${defaultDirection})`,
+                onSelect: () => {
+                  void bindRange(rich, bindTarget).then((next) => next && setBody(next));
+                },
+              },
+              ...(fits.length ? ([{ kind: 'separator' }] as MenuItem[]) : []),
+              ...fieldItems(fits, (f) => {
+                void bindRange(rich, bindTarget, { fieldId: f.id }).then(
+                  (next) => next && setBody(next),
+                );
+              }),
+              ...(unfit.length
+                ? ([{ kind: 'separator' }, { kind: 'note', label: 'Not usable inline' }] as MenuItem[])
+                : []),
+              ...fieldItems(unfit.map((u) => u.field), () => {}, true),
+            ]
+          : ([
+              {
+                kind: 'note',
+                label: 'Select the text to sync — an embed lives inside one paragraph.',
+              },
+              {
+                kind: 'note',
+                label: 'For all of it at once, use “Make this block a sync field”.',
+              },
+            ] as MenuItem[]),
       });
     }
 
     // Insert an existing field at the caret — its own value supplies the
     // text, so no selection is required.
     {
-      const { fits, unfit } = partitionByFit(fields, 'inline');
+      const { fits, unfit } = partitionByFit(fields, embedTarget);
       items.push({
         kind: 'submenu',
         label: 'Insert sync field here',
@@ -344,7 +537,7 @@ export function CanvasContextMenu({
           ...(fits.length
             ? fieldItems(fits, (f) => {
                 void insertField(rich, range ?? caretFallback(), f.id, {
-                  target: 'inline',
+                  target: embedTarget,
                 }).then((next) => next && setBody(next));
               })
             : ([{ kind: 'note', label: 'No inline-compatible fields yet.' }] as MenuItem[])),
@@ -359,6 +552,20 @@ export function CanvasContextMenu({
       });
     }
 
+    return items;
+  };
+
+  /* ---------- Text formatting on the selection ----------
+     Not a sync action, so it stays out of the sync section — it just
+     happens to need the same selection. */
+
+  const selectionFormatItems = (): MenuItem[] => {
+    const rich = getBodyRich();
+    if (readOnly || !rich || bodyLocked || block?.type === 'shape') return [];
+    const range = target.range;
+    const hasSel = !!range && range.start !== range.end;
+    const items: MenuItem[] = [];
+
     /* Formatting applies to the selection, or to all of the block's text
        when nothing is selected — the word-processor rule. The selection
        is put back afterwards, since marking re-renders the editor. */
@@ -366,13 +573,9 @@ export function CanvasContextMenu({
       setBody(hasSel ? applyMark(rich, range!, patch) : applyMarkAll(rich, patch));
       if (hasSel && block) {
         const id = block.id;
-        restoreSelectionSoon(
-          () =>
-            document.querySelector(
-              `[data-block-id="${id}"] .inline-editor-body`,
-            ) as HTMLElement | null,
-          range!,
-        );
+        // A table has one editor per cell; the first is not necessarily
+        // the one the selection is in.
+        restoreSelectionSoon(() => activeEditorRoot(id), range!);
       }
     };
     const has = (m: 'bold' | 'italic') =>
@@ -407,6 +610,91 @@ export function CanvasContextMenu({
         })),
       ],
     });
+
+    return items;
+  };
+
+  /* ---------- Whole-block binding ---------- */
+
+  const blockSyncItems = (): MenuItem[] => {
+    if (!block || !page || readOnly) return [];
+    const items: MenuItem[] = [];
+    if (!readOnly && blockBinding) {
+      items.push({
+        kind: 'header',
+        label: 'Block binding',
+        sub: blockBinding.fieldId
+          ? (fieldMap.get(blockBinding.fieldId)?.name ?? 'field')
+          : 'follows master block',
+      });
+      items.push({
+        kind: 'submenu',
+        label: 'Block direction',
+        items: DIRECTIONS.map((d) => ({
+          kind: 'check' as const,
+          label: d.label,
+          checked: blockBinding.direction === d.dir,
+          onSelect: () => patch({ binding: { ...blockBinding, direction: d.dir } }),
+        })),
+      });
+      if (blockBinding.fieldId) {
+        const bf = fieldMap.get(blockBinding.fieldId);
+        if (bf) {
+          items.push({
+            kind: 'item',
+            label: 'Edit field value…',
+            hint: 'isolated',
+            icon: <IconPencil size={13} />,
+            onSelect: () => onEditField(bf),
+          });
+        }
+      }
+      items.push({
+        kind: 'item',
+        label: 'Unlink whole block',
+        hint: 'keep copy',
+        icon: <IconUnlink size={13} />,
+        onSelect: () => patch({ binding: undefined }),
+      });
+    } else if (!readOnly && (block.type === 'text' || block.type === 'table' || block.type === 'image')) {
+      // Unbound block: promote it to a field, or bind it to an existing
+      // one of the matching shape.
+      const bt = blockTarget(block)!;
+      const { fits, unfit } = partitionByFit(fields, bt);
+      items.push({
+        kind: 'item',
+        label: block.type === 'table' ? 'Make this table a sync field' : 'Make this block a sync field',
+        icon: block.type === 'table' ? <IconTable size={13} /> : <IconLink size={13} />,
+        onSelect: () => {
+          void createFieldFromBlock(block).then((p) => p && patch(p));
+        },
+      });
+      items.push({
+        kind: 'submenu',
+        label: 'Bind block to existing field',
+        icon: <IconLink size={13} />,
+        disabled: fields.length === 0,
+        items: [
+          ...(fits.length
+            ? fieldItems(fits, (f) => {
+                void bindBlockToField(block, f.id).then((p) => p && patch(p));
+              })
+            : ([
+                {
+                  kind: 'note',
+                  label:
+                    block.type === 'table'
+                      ? 'No table fields yet — make one from a table first.'
+                      : 'No text fields available.',
+                },
+              ] as MenuItem[])),
+          ...(unfit.length
+            ? ([{ kind: 'separator' }, { kind: 'note', label: 'Wrong shape for this block' }] as MenuItem[])
+            : []),
+          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
+        ],
+      });
+    }
 
     return items;
   };
@@ -453,88 +741,10 @@ export function CanvasContextMenu({
       });
     }
 
-    // Whole-block binding controls.
-    if (!readOnly && blockBinding) {
-      items.push({ kind: 'separator' });
-      items.push({
-        kind: 'header',
-        label: 'Block binding',
-        sub: blockBinding.fieldId
-          ? (fieldMap.get(blockBinding.fieldId)?.name ?? 'field')
-          : 'follows master block',
-      });
-      items.push({
-        kind: 'submenu',
-        label: 'Block direction',
-        items: DIRECTIONS.map((d) => ({
-          kind: 'check' as const,
-          label: d.label,
-          checked: blockBinding.direction === d.dir,
-          onSelect: () => patch({ binding: { ...blockBinding, direction: d.dir } }),
-        })),
-      });
-      if (blockBinding.fieldId) {
-        const bf = fieldMap.get(blockBinding.fieldId);
-        if (bf) {
-          items.push({
-            kind: 'item',
-            label: 'Edit field value…',
-            hint: 'isolated',
-            icon: <IconPencil size={13} />,
-            onSelect: () => onEditField(bf),
-          });
-        }
-      }
-      items.push({
-        kind: 'item',
-        label: 'Unlink whole block',
-        hint: 'keep copy',
-        icon: <IconUnlink size={13} />,
-        onSelect: () => patch({ binding: undefined }),
-      });
-    } else if (!readOnly && (block.type === 'text' || block.type === 'table' || block.type === 'image')) {
-      // Unbound block: promote it to a field, or bind it to an existing
-      // one of the matching shape.
-      const bt = blockTarget(block)!;
-      const { fits, unfit } = partitionByFit(fields, bt);
-      items.push({ kind: 'separator' });
-      items.push({
-        kind: 'item',
-        label: block.type === 'table' ? 'Make this table a sync field' : 'Make this block a sync field',
-        icon: block.type === 'table' ? <IconTable size={13} /> : <IconLink size={13} />,
-        onSelect: () => {
-          void createFieldFromBlock(block).then((p) => p && patch(p));
-        },
-      });
-      items.push({
-        kind: 'submenu',
-        label: 'Bind block to existing field',
-        icon: <IconLink size={13} />,
-        disabled: fields.length === 0,
-        items: [
-          ...(fits.length
-            ? fieldItems(fits, (f) => {
-                void bindBlockToField(block, f.id).then((p) => p && patch(p));
-              })
-            : ([
-                {
-                  kind: 'note',
-                  label:
-                    block.type === 'table'
-                      ? 'No table fields yet — make one from a table first.'
-                      : 'No text fields available.',
-                },
-              ] as MenuItem[])),
-          ...(unfit.length
-            ? ([{ kind: 'separator' }, { kind: 'note', label: 'Wrong shape for this block' }] as MenuItem[])
-            : []),
-          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
-        ],
-      });
-    }
-
     if (!readOnly) {
-      items.push({ kind: 'separator' });
+      // Only when something precedes it, or the group opens on a rule and
+      // the join adds a second one.
+      if (items.length > 0) items.push({ kind: 'separator' });
       items.push({
         kind: 'item',
         label: 'Duplicate',
@@ -591,6 +801,31 @@ export function CanvasContextMenu({
     return items;
   };
 
+  /** On empty page: drop a field in as a block of its own. */
+  const pageSyncItems = (): MenuItem[] => {
+    if (block || readOnly || !page || fields.length === 0) return [];
+    const { fits, unfit } = partitionByFit(fields, 'inline');
+    return [
+      {
+        kind: 'submenu',
+        label: 'Insert sync field as a new block',
+        icon: <IconLink size={13} />,
+        items: [
+          ...(fits.length
+            ? fieldItems(fits, (f) => void addFieldBlock(f))
+            : ([{ kind: 'note', label: 'No inline-compatible fields yet.' }] as MenuItem[])),
+          ...(unfit.length
+            ? ([
+                { kind: 'separator' },
+                { kind: 'note', label: 'Needs a matching block instead' },
+              ] as MenuItem[])
+            : []),
+          ...fieldItems(unfit.map((u) => u.field), () => {}, true),
+        ],
+      },
+    ];
+  };
+
   /* ---------- Empty page section ---------- */
 
   const pageItems = (): MenuItem[] => {
@@ -607,7 +842,8 @@ export function CanvasContextMenu({
         kind: 'item',
         label: 'Table',
         icon: <IconTable size={13} />,
-        onSelect: () => dispatch({ type: 'ADD_BLOCK', pageId: page.id, blockType: 'table' }),
+        // The size is chosen before the block exists — see NewTablePanel.
+        onSelect: () => onInsertTable?.(),
       },
       {
         kind: 'item',
@@ -638,28 +874,6 @@ export function CanvasContextMenu({
       { kind: 'separator' },
       {
         kind: 'submenu',
-        label: 'Insert sync field as a new block',
-        icon: <IconLink size={13} />,
-        disabled: fields.length === 0,
-        items: (() => {
-          const { fits, unfit } = partitionByFit(fields, 'inline');
-          return [
-            ...(fits.length
-              ? fieldItems(fits, (f) => void addFieldBlock(f))
-              : ([{ kind: 'note', label: 'No inline-compatible fields yet.' }] as MenuItem[])),
-            ...(unfit.length
-              ? ([
-                  { kind: 'separator' },
-                  { kind: 'note', label: 'Needs a matching block instead' },
-                ] as MenuItem[])
-              : []),
-            ...fieldItems(unfit.map((u) => u.field), () => {}, true),
-          ];
-        })(),
-      },
-      { kind: 'separator' },
-      {
-        kind: 'submenu',
         label: 'Page',
         items: [
           {
@@ -683,13 +897,54 @@ export function CanvasContextMenu({
     ];
   };
 
-  const items: MenuItem[] = [
-    ...spanItems(),
-    ...selectionItems(),
-    ...(target.fieldId || (getBodyRich() && !readOnly) ? [] : []),
-    ...blockItems(),
-    ...pageItems(),
-  ];
+  /** Groups joined by a rule, with no leading or doubled separators. */
+  const joinSections = (sections: MenuItem[][]): MenuItem[] => {
+    const out: MenuItem[] = [];
+    for (const section of sections) {
+      if (section.length === 0) continue;
+      if (out.length > 0) out.push({ kind: 'separator' });
+      out.push(...section);
+    }
+    return out;
+  };
+
+  /*
+   * Everything to do with sync fields lives in ONE section, under one
+   * heading. Scattered through the menu — an embed's actions at the top,
+   * "make a field" in the middle, the block binding below Duplicate —
+   * they read as unrelated commands that happen to share a word, and the
+   * question "what is synced here?" has no single place to look.
+   *
+   * Within the section: narrowest claim first. The embed under the
+   * pointer, then the selection, then the cell, then the whole block.
+   */
+  const syncSection = joinSections([
+    spanItems(),
+    selectionSyncItems(),
+    cellItems(),
+    blockSyncItems(),
+    pageSyncItems(),
+  ]);
+
+  const items: MenuItem[] = joinSections([
+    syncSection.length
+      ? [
+          {
+            kind: 'header' as const,
+            label: 'Sync fields',
+            // The embed's own header names the field right below this
+            // one; two subtitles in a row is just noise.
+            ...(spanItems().length
+              ? {}
+              : { sub: block ? 'what this block shares' : 'shared content' }),
+          },
+          ...syncSection,
+        ]
+      : [],
+    selectionFormatItems(),
+    blockItems(),
+    pageItems(),
+  ]);
 
   if (readOnly && items.length === 0) {
     items.push({ kind: 'note', label: 'Read-only — press Edit to take the lock.' });

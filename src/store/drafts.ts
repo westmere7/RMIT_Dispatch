@@ -42,3 +42,26 @@ export async function saveDraft(documentId: string, pages: Page[], userId: strin
     .eq('document_id', documentId);
   if (error) throw error;
 }
+
+/**
+ * Like `saveDraft`, but reports whether the row was actually written.
+ *
+ * The drafts UPDATE policy refuses a document someone else holds a live
+ * lock on, and PostgREST reports that as ZERO ROWS, not as an error — so
+ * a dispatch would otherwise claim to have delivered content that never
+ * landed. Asking for the updated rows back is what makes the refusal
+ * visible.
+ */
+export async function saveDraftIfWritable(
+  documentId: string,
+  pages: Page[],
+  userId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('drafts')
+    .update({ pages, updated_by: userId })
+    .eq('document_id', documentId)
+    .select('document_id');
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}

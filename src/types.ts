@@ -134,11 +134,77 @@ export interface CellBinding {
   direction: SyncDirection;
 }
 
+/* ---------- Tables ----------
+   A table's LOOK is fixed by the stylesheet; what the author controls is
+   its shape — how big the rows and columns are, which cells are merged,
+   and what each cell holds. Cell text is edited in place like any other
+   text, so formatting comes from the text itself rather than from a
+   panel of table settings.
+
+   Sizing and merges live on the BLOCK, never in a sync field's value: a
+   table field carries `headerRow` + `rows`, so two documents can share
+   the same content and lay it out differently. */
+
+/**
+ * A merged region, anchored at its top-left cell. `rows` stays
+ * rectangular underneath — merging is presentation, so the content and
+ * every sync binding keep their coordinates.
+ */
+export interface CellMerge {
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+}
+
+/**
+ * What one cell overrides of the table's own defaults.
+ *
+ * `size` has to live on the CELL rather than on its runs: a paragraph's
+ * line box is at least as tall as the paragraph's OWN font-size, so a
+ * cell of small runs inside a normal-size paragraph reserves the taller
+ * line and reads as though someone had opened up the leading. A text
+ * block sets its size on the block for exactly the same reason.
+ */
+export interface CellFormat {
+  row: number;
+  col: number;
+  align?: TextAlign;
+  size?: TextSize;
+}
+
+/**
+ * A picture inside one cell. It sits above whatever text the cell has,
+ * and can follow an image sync field just as an image block can — so a
+ * logo swapped in the master reaches every adaptation's table.
+ */
+export interface CellImage {
+  row: number;
+  col: number;
+  /** Absent while a `down` binding is waiting to supply one. */
+  storagePath?: string;
+  fit?: 'cover' | 'contain';
+  alt?: string;
+  fieldId?: string;
+  direction?: SyncDirection;
+}
+
 export interface TableBlock extends BlockBase {
   type: 'table';
   headerRow: boolean;
   rows: RichText[][];
   cellBindings?: CellBinding[];
+  cellImages?: CellImage[];
+  cellFormats?: CellFormat[];
+  /**
+   * Percentages of the table's own box. A missing or zero entry shares
+   * what the sized tracks leave behind. Percentages, not lengths: the
+   * canvas rescales with zoom, and dragging a divider is then a pure
+   * exchange between two neighbours.
+   */
+  colWidths?: number[];
+  rowHeights?: number[];
+  merges?: CellMerge[];
 }
 
 export interface ImageBlock extends BlockBase {

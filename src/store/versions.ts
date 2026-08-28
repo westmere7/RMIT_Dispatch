@@ -26,6 +26,13 @@ export async function fetchVersions(documentId: string): Promise<Version[]> {
   return (data ?? []).map(map);
 }
 
+/** One version by id — used to name the version adaptations follow. */
+export async function fetchVersion(id: string): Promise<Version | null> {
+  const { data, error } = await supabase.from('versions').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ? map(data) : null;
+}
+
 export async function createVersion(args: {
   documentId: string;
   number: number;

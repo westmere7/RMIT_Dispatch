@@ -92,7 +92,7 @@ export function SpaceSettings() {
       <div className="card" style={{ padding: 'var(--space-5)' }}>
         <h2 style={{ marginBottom: 4 }}>Members</h2>
         <p className="muted text-xs" style={{ marginBottom: 16 }}>
-          Admin/editor: create, edit, finalize. Designer: read-only + comments.
+          Admin/editor: create, edit, dispatch. Designer: read-only + comments.
         </p>
 
         {isAdmin && (

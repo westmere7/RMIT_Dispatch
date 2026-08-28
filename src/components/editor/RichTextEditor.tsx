@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, type ReactNode } from 'react';
 import { useSpanEntry } from './useSpanEntry';
-import { parseRichDOM, rangeFromSelection, renderRichHTML } from '../../lib/richdom';
+import { insertPlainText, parseRichDOM, rangeFromSelection, renderRichHTML } from '../../lib/richdom';
 import type { TextRange } from '../../lib/richtext';
 import type { RichText, TextSize } from '../../types';
 
@@ -31,7 +31,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
   const lastEmitted = useRef<string>('');
   /* Same discipline as the canvas editor: embeds are atomic until you
      step into one, so nothing bleeds between neighbours. */
-  const { entered, enteredField, onDoubleClick, onClick } = useSpanEntry(rootRef);
+  const { entered, enteredField, onDoubleClick, onClick, onMouseDown } = useSpanEntry(rootRef);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -57,6 +57,15 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
     onChange(parsed);
   };
 
+  /** Paste is plain text here too — see `InlineTextEditor`. */
+  const onPaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+    insertPlainText(text, compact || !!entered);
+    handleInput();
+  };
+
   return (
     <div className={`rt-editor ${compact ? 'rt-compact' : ''}`}>
       {toolbar && !readOnly && <div className="rt-toolbar">{toolbar}</div>}
@@ -69,6 +78,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, {
         suppressContentEditableWarning
         onInput={handleInput}
         onBlur={handleInput}
+        onPaste={onPaste}
+        onMouseDown={onMouseDown}
         onClick={(e) => {
           onClick(e);
           if (!onSpanClick) return;

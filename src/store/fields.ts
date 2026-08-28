@@ -1,6 +1,7 @@
 import { stripMarks } from '../lib/richtext';
+import { collectUsages } from '../lib/syncfields';
 import { supabase } from '../lib/supabase';
-import type { FieldScope, FieldValue, SyncField } from '../types';
+import type { FieldScope, FieldValue, Page, SyncField } from '../types';
 
 /**
  * Single choke point for field values: strip character formatting so no
@@ -161,4 +162,88 @@ export async function renameFolder(
 export async function deleteField(id: string) {
   const { error } = await supabase.from('sync_fields').delete().eq('id', id);
   if (error) throw error;
+}
+
+/* ============================================================
+   Where a field is actually used.
+
+   "Available in" only said where a field COULD be embedded — every
+   project for a global one. What an editor needs before renaming or
+   deleting is where it IS embedded, which only the drafts know.
+   ============================================================ */
+
+export interface FieldUse {
+  projectId: string;
+  projectTitle: string;
+  /** Documents in that project that embed the field. */
+  documents: { id: string; title: string }[];
+}
+
+/**
+ * Every project that embeds each field in the space, with the documents
+ * that do it.
+ *
+ * Read from DRAFTS rather than from versions: the draft is what the
+ * document currently shows, so a field pulled out this morning stops
+ * counting immediately. Deliberately DIRECT references only — a field
+ * nested inside another field's value is a usage of that field, and
+ * following the chain would report projects the field's own name never
+ * appears in.
+ */
+export async function fetchFieldUsage(spaceId: string): Promise<Map<string, FieldUse[]>> {
+  const out = new Map<string, FieldUse[]>();
+
+  const { data: projects } = await supabase
+    .from('projects')
+    .select('id, title')
+    .eq('space_id', spaceId);
+  const projectIds = (projects ?? []).map((p) => p.id as string);
+  if (projectIds.length === 0) return out;
+  const projectTitle = new Map((projects ?? []).map((p) => [p.id as string, p.title as string]));
+
+  const { data: docs } = await supabase
+    .from('documents')
+    .select('id, project_id, title')
+    .in('project_id', projectIds);
+  const docIds = (docs ?? []).map((d) => d.id as string);
+  if (docIds.length === 0) return out;
+  const docInfo = new Map(
+    (docs ?? []).map((d) => [
+      d.id as string,
+      { projectId: d.project_id as string, title: d.title as string },
+    ]),
+  );
+
+  const { data: drafts } = await supabase
+    .from('drafts')
+    .select('document_id, pages')
+    .in('document_id', docIds);
+
+  for (const row of drafts ?? []) {
+    const info = docInfo.get(row.document_id as string);
+    if (!info) continue;
+    // One entry per field per DOCUMENT: a field embedded eight times in
+    // one page is still one document using it.
+    const seen = new Set(collectUsages((row.pages as Page[]) ?? []).map((u) => u.fieldId));
+    for (const fieldId of seen) {
+      const uses = out.get(fieldId) ?? [];
+      let project = uses.find((u) => u.projectId === info.projectId);
+      if (!project) {
+        project = {
+          projectId: info.projectId,
+          projectTitle: projectTitle.get(info.projectId) ?? 'Project',
+          documents: [],
+        };
+        uses.push(project);
+      }
+      project.documents.push({ id: row.document_id as string, title: info.title });
+      out.set(fieldId, uses);
+    }
+  }
+
+  for (const uses of out.values()) {
+    uses.sort((a, b) => a.projectTitle.localeCompare(b.projectTitle));
+    for (const u of uses) u.documents.sort((a, b) => a.title.localeCompare(b.title));
+  }
+  return out;
 }

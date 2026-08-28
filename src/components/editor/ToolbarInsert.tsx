@@ -11,9 +11,11 @@ import {
   IconLine,
   IconShapes,
   IconSquare,
+  IconTable,
   IconTriangle,
 } from '../Icons';
 import { FieldPicker } from './FieldPicker';
+import { NewTablePanel } from './NewTablePanel';
 
 const SHAPES: { kind: ShapeKind; label: string; Icon: typeof IconSquare }[] = [
   { kind: 'rect', label: 'Rectangle', Icon: IconSquare },
@@ -99,5 +101,31 @@ export function InsertFieldButton({ pageId }: { pageId: string }) {
       compact
       onPick={add}
     />
+  );
+}
+
+/**
+ * Insert a table, after asking how big. The size is settled before the
+ * block exists so the author never has to reshape one — reshaping is
+ * what has to keep merges, bindings and track sizes in step.
+ */
+export function InsertTableButton({ pageId }: { pageId: string }) {
+  const { dispatch } = useEditor();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="btn btn-sm" onClick={() => setOpen(true)}>
+        <IconTable size={13} /> Table
+      </button>
+      {open && (
+        <NewTablePanel
+          onClose={() => setOpen(false)}
+          onCreate={(table) => {
+            setOpen(false);
+            dispatch({ type: 'ADD_BLOCK', pageId, blockType: 'table', table });
+          }}
+        />
+      )}
+    </>
   );
 }

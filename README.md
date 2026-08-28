@@ -72,7 +72,7 @@ comments update in realtime. (`server.bat` passes `--host` so both origins resol
 ## Concepts
 
 - **Space** — a team. Members have a role: `admin` / `editor` (create, lock, edit,
-  finalize, restore, manage sync fields and adaptations) or `designer` (read-only +
+  dispatch, restore, manage sync fields and adaptations) or `designer` (read-only +
   comments). RLS restricts every row to members of its space.
 - **Project** — one **master** document plus a tree of **adaptations**. An adaptation
   may itself be derived from another adaptation, up to two levels below the master,
@@ -149,8 +149,14 @@ comments update in realtime. (`server.bat` passes `--host` so both origins resol
   or flip an embed to `up` / `two-way` where the adaptation owns the wording.
 - **Propagation** — field changes flow **downstream instantly** to every open
   document. **Upstream** edits (`up`/`two-way`) apply when the editor presses *Save*,
-  *Stop editing* or *Finalize* — until then a "pending upstream" pill is shown.
+  *Stop editing* or *Dispatch* — until then a "pending upstream" pill is shown.
   Conflicts are last-write-wins per field.
-- **Versions** — *Finalize* flushes the draft, applies pending upstream changes,
+- **Dispatch** — the app's namesake action: push a document's shared content down to
+  the adaptations that follow it, choosing which ones receive it. From the editor it
+  also writes the version they will follow (name it, or take the bare `vN`), applies
+  pending upstream changes and releases the lock. From the project's lineage view it
+  only propagates — no new version — and names the version the adaptations land on.
+  A document someone else is editing cannot receive one; the run says so.
+- **Versions** — *Dispatch* flushes the draft, applies pending upstream changes,
   writes an immutable snapshot and releases the lock. *Restore* copies a snapshot back
   into the working draft (bindings restore too, re-resolved against current values).

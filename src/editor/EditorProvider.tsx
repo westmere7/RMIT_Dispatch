@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { effectiveColumns } from '../grid/presets';
-import { clampPos, createBlock, duplicateBlock } from '../lib/blocks';
+import { clampPos, createBlock, duplicateBlock, type TableSpec } from '../lib/blocks';
 import { newId } from '../lib/ids';
 import { applySyncDown, type FieldMap } from '../lib/syncfields';
 import type {
@@ -77,6 +77,8 @@ export type EditorAction =
       shape?: ShapeKind;
       /** Pre-filled body, e.g. a text block seeded with a field embed. */
       body?: RichText;
+      /** Rows, columns and header for a new table. */
+      table?: TableSpec;
     }
   | {
       type: 'UPDATE_BLOCK';
@@ -289,6 +291,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const block = createBlock(action.blockType, page, state.grid, {
         shape: action.shape,
         body: action.body,
+        table: action.table,
       });
       const pages = mutatePage(state.pages, action.pageId, (p) => ({
         ...p,
@@ -440,6 +443,8 @@ interface EditorCtx {
   /** Force-save any pending debounced draft write. */
   flush: () => Promise<void>;
   dirty: boolean;
+  /** Live, unlike `dirty` — a guard must not read a render-old value. */
+  isDirty: () => boolean;
   canUndo: boolean;
   canRedo: boolean;
   undo: () => void;
@@ -558,6 +563,27 @@ export function EditorProvider({
     }
   }, [state.rev, state.origin, state.pages, readOnly, doSave, autosaveMs]);
 
+  /**
+   * Warn before the tab closes on work that has not reached the server.
+   *
+   * The autosave debounce means a change can be seconds old and still
+   * only in memory, and the unmount flush below cannot help when the tab
+   * is going away — the request would be cancelled with the page. The
+   * browser only honours this from inside the handler, so the check has
+   * to be the ref rather than render state.
+   */
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!dirtyRef.current || readOnlyRef.current) return;
+      e.preventDefault();
+      // Legacy browsers need a return value; the text itself is ignored.
+      e.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
   // Flush on unmount.
   useEffect(() => {
     return () => {
@@ -581,6 +607,7 @@ export function EditorProvider({
     currentPage,
     flush: doSave,
     dirty: dirtyRef.current,
+    isDirty: () => dirtyRef.current,
     canUndo: state.past.length > 0,
     canRedo: state.future.length > 0,
     undo: () => dispatch({ type: 'UNDO' }),

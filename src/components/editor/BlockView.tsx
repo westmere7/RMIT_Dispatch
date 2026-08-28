@@ -1,8 +1,24 @@
-import { Fragment } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { IconImage } from '../Icons';
 import { mediaUrl } from '../../lib/supabase';
+import {
+  cellFormatAt,
+  cellImageAt,
+  columnPercents,
+  isCovered,
+  mergeAt,
+  rowPercents,
+  tableSize,
+} from '../../lib/tables';
 import { runFontSize } from '../../lib/textsize';
-import type { Block, InlineNode, RichText, ShapeBlock, TextSize } from '../../types';
+import type {
+  Block,
+  InlineNode,
+  RichText,
+  ShapeBlock,
+  TableBlock,
+  TextSize,
+} from '../../types';
 import { isFieldSpan } from '../../types';
 
 /* Render-only view of a block's content (canvas + previews). Field spans
@@ -73,6 +89,89 @@ export function RichTextView({ rich, base }: { rich: RichText; base?: TextSize }
   );
 }
 
+/**
+ * A table.
+ *
+ * Every row goes in one `<tbody>` rather than splitting a `<thead>` off:
+ * a merge can span the header into the row below it, and a table cannot
+ * span a section boundary. Header cells are still `<th>`, which is what
+ * the stylesheet keys their distinct look off.
+ *
+ * `rows` is always rectangular — merging hides cells, it never removes
+ * them — so the loop walks every coordinate and skips what a merge has
+ * already swallowed.
+ */
+export function TableView({
+  block,
+  renderCell,
+}: {
+  block: TableBlock;
+  /** Lets the inline editor put a live editor in each cell instead. */
+  renderCell?: (row: number, col: number, rich: RichText) => ReactNode;
+}) {
+  const { rows: nRows, cols: nCols } = tableSize(block);
+  const colPct = columnPercents(block);
+  const rowPct = rowPercents(block);
+
+  return (
+    <div className="block-content size-md" style={{ padding: '2%' }}>
+      <table className="block-table">
+        <colgroup>
+          {colPct.map((w, ci) => (
+            <col key={ci} style={{ width: `${w}%` }} />
+          ))}
+        </colgroup>
+        <tbody>
+          {block.rows.map((row, ri) => (
+            <tr key={ri} style={{ height: `${rowPct[ri] ?? 0}%` }}>
+              {row.map((cell, ci) => {
+                if (isCovered(block, ri, ci)) return null;
+                const merge = mergeAt(block, ri, ci);
+                const image = cellImageAt(block, ri, ci);
+                const fmt = cellFormatAt(block, ri, ci);
+                const isHeader = block.headerRow && ri === 0;
+                const Tag = isHeader ? 'th' : 'td';
+                return (
+                  <Tag
+                    key={ci}
+                    /* The SIZE goes on the cell, not on its runs: the
+                       paragraph's own font-size sets the minimum line
+                       height, so runs alone would leave a small cell
+                       sitting in a tall line. */
+                    style={{ textAlign: fmt?.align, fontSize: runFontSize(fmt?.size, 'md') }}
+                    data-cell-row={ri}
+                    data-cell-col={ci}
+                    {...(merge ? { rowSpan: merge.rowSpan, colSpan: merge.colSpan } : {})}
+                    {...(isHeader ? { scope: 'col' as const } : {})}
+                  >
+                    {/* A cell cannot clip its own overflow — `overflow`
+                        does nothing on a table cell — so the content sits
+                        in a box that can. Present in BOTH modes, so
+                        opening the editor moves nothing. */}
+                    <div className="cell-body">
+                      {image?.storagePath && (
+                        <img
+                          className="cell-image"
+                          src={mediaUrl(image.storagePath)}
+                          alt={image.alt ?? ''}
+                          style={{ objectFit: image.fit ?? 'contain' }}
+                          draggable={false}
+                        />
+                      )}
+                      {renderCell ? renderCell(ri, ci, cell) : <RichTextView rich={cell} />}
+                    </div>
+                  </Tag>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {nRows === 0 || nCols === 0 ? <span className="muted text-xs">Empty table</span> : null}
+    </div>
+  );
+}
+
 export function BlockView({ block }: { block: Block }) {
   if (block.type === 'text') {
     return (
@@ -89,38 +188,7 @@ export function BlockView({ block }: { block: Block }) {
     );
   }
 
-  if (block.type === 'table') {
-    const bodyRows = block.headerRow ? block.rows.slice(1) : block.rows;
-    const header = block.headerRow ? block.rows[0] : null;
-    return (
-      <div className="block-content" style={{ padding: '2%' }}>
-        <table className="block-table">
-          {header && (
-            <thead>
-              <tr>
-                {header.map((cell, ci) => (
-                  <th key={ci} data-cell-row={0} data-cell-col={ci}>
-                    <RichTextView rich={cell} />
-                  </th>
-                ))}
-              </tr>
-            </thead>
-          )}
-          <tbody>
-            {bodyRows.map((row, ri) => (
-              <tr key={ri}>
-                {row.map((cell, ci) => (
-                  <td key={ci} data-cell-row={ri + (block.headerRow ? 1 : 0)} data-cell-col={ci}>
-                    <RichTextView rich={cell} />
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
+  if (block.type === 'table') return <TableView block={block} />;
 
   if (block.type === 'shape') return <ShapeView block={block} />;
 

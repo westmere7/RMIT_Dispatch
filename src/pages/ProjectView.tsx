@@ -5,6 +5,7 @@ import { flagColor, flagLabel } from '../lib/flags';
 import { useDialog } from '../components/Dialog';
 import { GridPreview } from '../components/GridPreview';
 import {
+  IconDispatch,
   IconLock,
   IconMessage,
   IconPlus,
@@ -16,6 +17,7 @@ import {
   DocumentSettingsPanel,
   type DocumentSettingsValues,
 } from '../components/DocumentSettingsPanel';
+import { DispatchPanel, type DispatchArgs } from '../components/DispatchPanel';
 import { NewAdaptationPanel } from '../components/NewAdaptationPanel';
 import { canvasAspect, effectiveColumns } from '../grid/presets';
 import { clampPos, rescalePages } from '../lib/blocks';
@@ -28,6 +30,14 @@ import {
   railColumn,
   type FlatDoc,
 } from '../lib/doctree';
+import {
+  buildDispatchTargets,
+  lockBlocking,
+  summariseDispatch,
+  versionName,
+  type DispatchCandidate,
+  type DispatchTarget,
+} from '../lib/dispatch';
 import { newId } from '../lib/ids';
 import {
   cloneForAdaptation,
@@ -44,10 +54,12 @@ import {
   updateDocumentMeta,
 } from '../store/documents';
 import { fetchCommentCounts } from '../store/comments';
+import { fetchDispatchCandidates, runDispatch } from '../store/dispatch';
 import { fetchDraft, saveDraft } from '../store/drafts';
 import { fetchFieldsForProject } from '../store/fields';
 import { fetchProject, updateProjectMeta } from '../store/projects';
 import { useSpaces } from '../store/spaces';
+import { fetchVersion } from '../store/versions';
 import type { DispatchDocument, GridConfig, Page, Project, SyncField } from '../types';
 
 interface DocRow {
@@ -88,6 +100,12 @@ export function ProjectView() {
   const [settingsFor, setSettingsFor] = useState<DispatchDocument | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
+  /** Document a dispatch is being composed from, and what it will reach. */
+  const [dispatchFrom, setDispatchFrom] = useState<DispatchDocument | null>(null);
+  const [dispatchTargets, setDispatchTargets] = useState<DispatchTarget[] | null>(null);
+  const [dispatchPages, setDispatchPages] = useState<Page[] | null>(null);
+  const [dispatchVersion, setDispatchVersion] = useState<string | null>(null);
+  const [dispatchBusy, setDispatchBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -231,6 +249,65 @@ export function ProjectView() {
       await load();
     } finally {
       setBusy(false);
+    }
+  };
+
+  /* ---------- Dispatch ----------
+     From here a dispatch only PROPAGATES: it pushes the content the
+     document already holds down to the adaptations that follow it. The
+     version is not being written, so it is shown rather than named —
+     what the adaptations end up following. */
+
+  const openDispatch = async (doc: DispatchDocument) => {
+    if (!user || !projectId) return;
+    setDispatchFrom(doc);
+    setDispatchTargets(null);
+    setDispatchPages(null);
+    setDispatchVersion(null);
+    try {
+      // Re-read rather than trusting the loaded rows: locks and drafts
+      // move while this page sits open, and both decide what can land.
+      const candidates: DispatchCandidate[] = await fetchDispatchCandidates(projectId);
+      setDispatchTargets(buildDispatchTargets(doc.id, candidates, user.uid, Date.now()));
+      setDispatchPages(candidates.find((c) => c.doc.id === doc.id)?.pages ?? []);
+      if (doc.currentVersionId) {
+        const v = await fetchVersion(doc.currentVersionId);
+        if (v) setDispatchVersion(versionName(v.number, v.label));
+      } else if (doc.versionCount > 0) {
+        setDispatchVersion(versionName(doc.versionCount));
+      }
+    } catch (e) {
+      console.error('dispatch targets failed', e);
+      setDispatchTargets([]);
+    }
+  };
+
+  const confirmDispatch = async ({ targetIds }: DispatchArgs) => {
+    const source = dispatchFrom;
+    if (!user || !projectId || !project || !source) return;
+    const chosen = (dispatchTargets ?? [])
+      .filter((t) => targetIds.includes(t.doc.id))
+      .map((t) => t.doc);
+    if (chosen.length === 0) return;
+    setDispatchBusy(true);
+    try {
+      const outcomes = await runDispatch({
+        projectId,
+        spaceId: project.spaceId,
+        source: { id: source.id, pages: dispatchPages ?? [] },
+        targets: chosen,
+        userId: user.uid,
+      });
+      setDispatchFrom(null);
+      await load();
+      await dialog.alert(`Dispatched from ${source.title}`, {
+        message: summariseDispatch(outcomes),
+      });
+    } catch (e) {
+      console.error(e);
+      await dialog.alert('Dispatch failed', { message: String(e) });
+    } finally {
+      setDispatchBusy(false);
     }
   };
 
@@ -430,6 +507,19 @@ export function ProjectView() {
                 </div>
 
                 <div className="lin-actions" onClick={(e) => e.stopPropagation()}>
+                  {/* Only a document something derives from can dispatch. */}
+                  <span className="lin-disp-slot">
+                    {canEdit && node.children.length > 0 && (
+                      <button
+                        className="lin-dispatch"
+                        title={`Push ${doc.title}'s shared content to the adaptations below it`}
+                        onClick={() => void openDispatch(doc)}
+                        disabled={busy}
+                      >
+                        <IconDispatch size={12} /> Dispatch
+                      </button>
+                    )}
+                  </span>
                   <button
                     className={`lin-act ${(comments.get(doc.id)?.open ?? 0) > 0 ? 'has-open' : ''}`}
                     title={
@@ -517,6 +607,20 @@ export function ProjectView() {
           onSubmit={(v) => void saveSettings(v)}
           onClose={() => setSettingsFor(null)}
           busy={busy}
+        />
+      )}
+
+      {dispatchFrom && (
+        <DispatchPanel
+          source={dispatchFrom}
+          mode="propagate"
+          targets={dispatchTargets ?? []}
+          loading={dispatchTargets === null}
+          currentVersion={dispatchVersion}
+          sourceLockedBy={user ? lockBlocking(dispatchFrom, user.uid, Date.now()) : null}
+          onDispatch={(a) => void confirmDispatch(a)}
+          onClose={() => !dispatchBusy && setDispatchFrom(null)}
+          busy={dispatchBusy}
         />
       )}
 

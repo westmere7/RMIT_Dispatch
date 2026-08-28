@@ -2,23 +2,18 @@ import { useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../editor/EditorProvider';
 import { useWorkspace } from '../../editor/workspaceContext';
 import { effectiveColumns } from '../../grid/presets';
-import { uuid } from '../../lib/ids';
 import { blockTarget } from '../../lib/fieldtypes';
 import { rangeFromAny } from '../../lib/richdom';
 import { SIZE_LABEL, TEXT_SIZES } from '../../lib/textsize';
 import {
   applyMark,
   applyMarkAll,
-  emptyRich,
-  plainText,
   rangeHasMark,
   rangeSize,
   richHasMark,
   type TextRange,
 } from '../../lib/richtext';
-import { autoFieldName } from '../../lib/syncfields';
-import { useAuth } from '../../store/auth';
-import { createField } from '../../store/fields';
+import { isContentLocked } from '../../lib/syncfields';
 import { deleteMedia, uploadMedia } from '../../store/media';
 import {
   COMPRESSION_LEVELS,
@@ -29,13 +24,10 @@ import {
 import { useSpaces } from '../../store/spaces';
 import type {
   Block,
-  CellBinding,
   ImageBlock,
   ShapeBlock,
   ShapeKind,
   RichText,
-  SyncDirection,
-  TableBlock,
   TextAlign,
   TextBlock,
   TextSize,
@@ -49,7 +41,6 @@ import {
   IconCopy,
   IconItalic,
   IconLink,
-  IconPlus,
   IconSendBack,
   IconTrash,
 } from '../Icons';
@@ -168,7 +159,6 @@ export function SingleBlock({ block, pageId }: { block: Block; pageId: string })
       {!readOnly && <BlockFieldRow block={block} pageId={pageId} />}
 
       {block.type === 'text' && <TextProps block={block} update={update} />}
-      {block.type === 'table' && <TableProps block={block} update={update} pageId={pageId} />}
       {block.type === 'image' && <ImageProps block={block} update={update} />}
       {block.type === 'shape' && <ShapeProps block={block} update={update} />}
     </div>
@@ -240,11 +230,28 @@ export const SIZES = TEXT_SIZES;
  */
 export function liveRangeFor(blockId: string, own: TextRange | null | undefined): TextRange | null {
   if (own && own.end > own.start) return own;
-  const canvasRoot = document.querySelector(
-    `[data-block-id="${blockId}"] .inline-editor-body`,
-  ) as HTMLElement | null;
-  const onCanvas = rangeFromAny([canvasRoot]);
+  const onCanvas = rangeFromAny([activeEditorRoot(blockId)]);
   return onCanvas && onCanvas.end > onCanvas.start ? onCanvas : null;
+}
+
+/**
+ * The on-canvas editor the caret is actually in.
+ *
+ * A text block has one; a TABLE has one per cell, so taking the first
+ * would aim every formatting button at cell R1C1 whatever the author had
+ * selected. The one containing the selection is the one being edited.
+ */
+export function activeEditorRoot(blockId: string): HTMLElement | null {
+  const roots = Array.from(
+    document.querySelectorAll(`[data-block-id="${blockId}"] .inline-editor-body`),
+  ) as HTMLElement[];
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount > 0) {
+    const node = sel.getRangeAt(0).startContainer;
+    const hit = roots.find((r) => r.contains(node));
+    if (hit) return hit;
+  }
+  return roots[0] ?? null;
 }
 
 export function TextProps({ block, update }: { block: TextBlock; update: (p: Partial<Block>) => void }) {
@@ -266,8 +273,8 @@ export function TextProps({ block, update }: { block: TextBlock; update: (p: Par
     const range = liveRangeFor(block.id, editorRef.current?.getRange());
     return (range ? rangeSize(block.body, range) : null) ?? block.size ?? 'md';
   };
-  const boundDown = block.binding && block.binding.direction !== 'up';
-  const locked = readOnly || !!boundDown;
+  const boundDown = isContentLocked(block.binding);
+  const locked = readOnly || boundDown;
 
   return (
     <>
@@ -425,263 +432,6 @@ export function RichTextBody({
 }
 
 /* ---------- Table ---------- */
-
-export function TableProps({
-  block,
-  update,
-  pageId,
-}: {
-  block: TableBlock;
-  update: (p: Partial<Block>) => void;
-  pageId: string;
-}) {
-  void pageId;
-  const { readOnly } = useEditor();
-  const { doc, project, fields, setFields, fieldMap } = useWorkspace();
-  const { user } = useAuth();
-  const [cell, setCell] = useState<{ r: number; c: number }>({ r: 0, c: 0 });
-  const cellEditorRef = useRef<RichTextEditorHandle>(null);
-  const { insertField, checkFit } = useFieldOps();
-
-  const nRows = block.rows.length;
-  const nCols = block.rows[0]?.length ?? 0;
-  const r = Math.min(cell.r, nRows - 1);
-  const c = Math.min(cell.c, nCols - 1);
-  const current = block.rows[r]?.[c] ?? emptyRich();
-  const binding = block.cellBindings?.find((b) => b.row === r && b.col === c);
-  const boundDown = binding && binding.direction !== 'up';
-
-  const setRows = (rows: RichText[][], cellBindings?: CellBinding[]) =>
-    update({ rows, ...(cellBindings !== undefined ? { cellBindings } : {}) } as Partial<Block>);
-
-  const setCurrentCell = (rich: RichText) => {
-    const rows = block.rows.map((row, ri) => row.map((cc, ci) => (ri === r && ci === c ? rich : cc)));
-    setRows(rows);
-  };
-
-  const insertRow = () => {
-    const rows = [...block.rows];
-    rows.splice(r + 1, 0, Array.from({ length: nCols }, () => emptyRich()));
-    const cb = (block.cellBindings ?? []).map((b) => (b.row > r ? { ...b, row: b.row + 1 } : b));
-    setRows(rows, cb);
-  };
-  const deleteRow = () => {
-    if (nRows <= 1) return;
-    const rows = block.rows.filter((_, ri) => ri !== r);
-    const cb = (block.cellBindings ?? [])
-      .filter((b) => b.row !== r)
-      .map((b) => (b.row > r ? { ...b, row: b.row - 1 } : b));
-    setRows(rows, cb);
-    setCell({ r: Math.max(0, r - 1), c });
-  };
-  const insertCol = () => {
-    const rows = block.rows.map((row) => {
-      const next = [...row];
-      next.splice(c + 1, 0, emptyRich());
-      return next;
-    });
-    const cb = (block.cellBindings ?? []).map((b) => (b.col > c ? { ...b, col: b.col + 1 } : b));
-    setRows(rows, cb);
-  };
-  const deleteCol = () => {
-    if (nCols <= 1) return;
-    const rows = block.rows.map((row) => row.filter((_, ci) => ci !== c));
-    const cb = (block.cellBindings ?? [])
-      .filter((b) => b.col !== c)
-      .map((b) => (b.col > c ? { ...b, col: b.col - 1 } : b));
-    setRows(rows, cb);
-    setCell({ r, c: Math.max(0, c - 1) });
-  };
-
-  const bindCell = async (fieldId: string, createNew: boolean) => {
-    if (!user) return;
-    const direction: SyncDirection = doc.kind === 'master' ? 'two-way' : 'down';
-    if (!createNew) {
-      const f = fieldMap.get(fieldId);
-      // A table field owns a whole table; it can't live in one cell.
-      if (!f || !(await checkFit(f, 'tableCell'))) return;
-    }
-    if (createNew) {
-      const name = autoFieldName(plainText(current), new Set(fields.map((f) => f.name)));
-      const field = await createField({
-        id: fieldId,
-        projectId: project.id,
-        spaceId: project.spaceId,
-        scope: 'local',
-        name,
-        value: { kind: 'richtext', rich: current },
-        userId: user.uid,
-      });
-      setFields((prev) => [...prev, field]);
-    }
-    const cb = [
-      ...(block.cellBindings ?? []).filter((b) => !(b.row === r && b.col === c)),
-      { row: r, col: c, fieldId, direction },
-    ];
-    update({ cellBindings: cb } as Partial<Block>);
-  };
-
-  const unbindCell = () => {
-    update({
-      cellBindings: (block.cellBindings ?? []).filter((b) => !(b.row === r && b.col === c)),
-    } as Partial<Block>);
-  };
-
-
-  return (
-    <>
-      <div className="field">
-        <label>
-          <input
-            type="checkbox"
-            checked={block.headerRow}
-            disabled={readOnly}
-            onChange={(e) => update({ headerRow: e.target.checked } as Partial<Block>)}
-            style={{ marginRight: 6 }}
-          />
-          First row is a header
-        </label>
-      </div>
-
-      <div className="field">
-        <label>
-          Cells ({nRows}×{nCols}) — selected: R{r + 1} C{c + 1}
-        </label>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${nCols}, 1fr)`,
-            gap: 2,
-            maxHeight: 140,
-            overflow: 'auto',
-          }}
-        >
-          {block.rows.map((row, ri) =>
-            row.map((cc, ci) => {
-              const isSel = ri === r && ci === c;
-              const hasBind = block.cellBindings?.some((b) => b.row === ri && b.col === ci);
-              return (
-                <button
-                  key={`${ri}-${ci}`}
-                  onClick={() => setCell({ r: ri, c: ci })}
-                  title={plainText(cc)}
-                  style={{
-                    height: 24,
-                    fontSize: 10,
-                    overflow: 'hidden',
-                    whiteSpace: 'nowrap',
-                    textOverflow: 'ellipsis',
-                    border: `1px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`,
-                    borderRadius: 3,
-                    background: hasBind ? 'var(--accent-wash)' : isSel ? 'var(--surface-2)' : 'transparent',
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer',
-                    padding: '0 3px',
-                  }}
-                >
-                  {plainText(cc) || '·'}
-                </button>
-              );
-            }),
-          )}
-        </div>
-      </div>
-
-      {!readOnly && (
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          <button className="btn btn-sm" onClick={insertRow}>
-            + Row
-          </button>
-          <button className="btn btn-sm" onClick={deleteRow} disabled={nRows <= 1}>
-            − Row
-          </button>
-          <button className="btn btn-sm" onClick={insertCol}>
-            + Col
-          </button>
-          <button className="btn btn-sm" onClick={deleteCol} disabled={nCols <= 1}>
-            − Col
-          </button>
-        </div>
-      )}
-
-      <div className="field">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          Cell content
-          {binding && (
-            <span className={`pill ${binding.direction === 'down' ? 'pill-accent' : 'pill-warning'}`}>
-              {binding.direction === 'down' ? '↓' : binding.direction === 'up' ? '↑' : '⇅'}{' '}
-              {fieldMap.get(binding.fieldId)?.name ?? 'field'}
-            </span>
-          )}
-        </label>
-        <RichTextEditor
-          ref={cellEditorRef}
-          value={current}
-          onChange={setCurrentCell}
-          readOnly={readOnly || !!boundDown}
-          compact
-        />
-        {!readOnly && (
-          <div style={{ display: 'flex', gap: 4, marginTop: 4, position: 'relative', flexWrap: 'wrap' }}>
-            {binding ? (
-              <>
-                <select
-                  className="input"
-                  style={{ width: 110, height: 28 }}
-                  value={binding.direction}
-                  onChange={(e) =>
-                    update({
-                      cellBindings: (block.cellBindings ?? []).map((b) =>
-                        b.row === r && b.col === c
-                          ? { ...b, direction: e.target.value as SyncDirection }
-                          : b,
-                      ),
-                    } as Partial<Block>)
-                  }
-                  aria-label="Cell sync direction"
-                >
-                  <option value="down">↓ down</option>
-                  <option value="up">↑ up</option>
-                  <option value="two-way">⇅ two-way</option>
-                </select>
-                <button className="btn btn-sm" onClick={unbindCell}>
-                  Unlink cell
-                </button>
-              </>
-            ) : (
-              <FieldPicker
-                fields={fields}
-                target="tableCell"
-                label="Bind cell to field"
-                icon={<IconLink size={12} />}
-                compact
-                createLabel="New field from cell"
-                onCreate={() => void bindCell(uuid(), true)}
-                onPick={(f) => void bindCell(f.id, false)}
-              />
-            )}
-            {/* Insert a field inside the cell's text, rather than owning
-                the whole cell. */}
-            {!boundDown && (
-              <FieldPicker
-                fields={fields}
-                target="tableCell"
-                label="Insert in cell"
-                icon={<IconPlus size={12} />}
-                compact
-                onPick={(f) => {
-                  void insertField(current, cellEditorRef.current?.getRange() ?? null, f.id, {
-                    target: 'tableCell',
-                  }).then((next) => next && setCurrentCell(next));
-                }}
-              />
-            )}
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
 
 /* ---------- Image ---------- */
 

@@ -331,6 +331,20 @@ export function marksAt(nodes: InlineNode[], offset: number): MarkPatch {
  * children, and the relative range within the innermost enclosing field
  * is reported so the caller can mirror the wrap into the field's value.
  */
+/**
+ * The whole of a single-paragraph body, as a range.
+ *
+ * Selecting the BLOCK and selecting its text are the same intent, so the
+ * field actions work with no text selected — but only here: an embed
+ * lives inside one paragraph, so a multi-paragraph body has no inline
+ * equivalent and the block-level action is the answer instead.
+ */
+export function wholeTextRange(rich: RichText): TextRange | null {
+  if (rich.length !== 1) return null;
+  const len = plainText(rich).length;
+  return len > 0 ? { para: 0, start: 0, end: len } : null;
+}
+
 export function wrapField(
   rich: RichText,
   range: TextRange,

@@ -44,6 +44,17 @@ export function findFreeSlot(page: Page, cols: number, rows: number, w: number, 
 
 /* ---------- Creation ---------- */
 
+/** What a new table is made of, chosen before it is inserted. */
+export interface TableSpec {
+  rows: number;
+  cols: number;
+  headerRow: boolean;
+}
+
+export const DEFAULT_TABLE: TableSpec = { rows: 3, cols: 3, headerRow: true };
+/** A table bigger than this is a spreadsheet, not a layout element. */
+export const MAX_TABLE = 20;
+
 const DEFAULT_SIZES: Record<BlockType, { w: number; h: number }> = {
   text: { w: 6, h: 3 },
   table: { w: 8, h: 4 },
@@ -55,7 +66,7 @@ export function createBlock(
   type: BlockType,
   page: Page,
   grid: GridConfig,
-  opts: { shape?: ShapeKind; body?: RichText } = {},
+  opts: { shape?: ShapeKind; body?: RichText; table?: TableSpec } = {},
 ): Block {
   const cols = effectiveColumns(grid, page.kind);
   const rows = grid.rows;
@@ -88,17 +99,24 @@ export function createBlock(
         stroke: 'var(--accent)',
         strokeWidth: 2,
       };
-    case 'table':
+    case 'table': {
+      // The author chose the shape before inserting, so an empty grid of
+      // exactly that size beats a two-by-two they then have to rebuild.
+      const spec = opts.table ?? DEFAULT_TABLE;
+      const nCols = Math.max(1, Math.min(MAX_TABLE, spec.cols));
+      const nRows = Math.max(1, Math.min(MAX_TABLE, spec.rows));
       return {
         id,
         type,
         pos,
-        headerRow: true,
-        rows: [
-          [richFromText('Header 1'), richFromText('Header 2')],
-          [emptyRich(), emptyRich()],
-        ],
+        headerRow: spec.headerRow,
+        rows: Array.from({ length: nRows }, (_, r) =>
+          Array.from({ length: nCols }, (_, c) =>
+            r === 0 && spec.headerRow ? richFromText(`Column ${c + 1}`) : emptyRich(),
+          ),
+        ),
       };
+    }
     case 'image':
       return { id, type, pos, fit: 'cover' };
   }

@@ -914,9 +914,9 @@ select.input {
 .gf-table {
   padding: 0;
   overflow: hidden;
-  /* Roughly the lineage page's measure, so the two full-width pages
-     agree on how wide a block of content should get. */
-  max-width: 1320px;
+  /* Full width: the row is a dense grid of eight columns, and capping it
+     wastes the space the values need while leaving the page lopsided. */
+  width: 100%;
 }
 .gf-grid {
   display: grid;
@@ -1046,10 +1046,81 @@ select.input {
 .gf-home {
   font-size: 10px;
   color: var(--text-muted);
-  text-align: right;
+  display: flex;
+  justify-content: flex-end;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Where a field is EMBEDDED, not where it could be. A count that opens
+   the list beats a label that says "all projects" on every other row. */
+.gf-use {
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.gf-use.is-unused {
+  color: var(--text-muted);
+  opacity: 0.65;
+  font-weight: 500;
+}
+.gf-use.is-used {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.gf-use.is-used:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.gf-use-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.gf-use-project {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.gf-use-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+.gf-use-title:hover {
+  text-decoration: underline;
+}
+.gf-use-docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.gf-use-doc {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+}
+.gf-use-doc:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .gf-when {
   font-size: 10px;
@@ -1362,7 +1433,16 @@ select.input {
   justify-content: flex-end;
   gap: 2px;
   flex-shrink: 0;
-  width: 158px;
+  width: 264px;
+}
+/* Dispatch keeps its column on every row, filled or not, so the icon
+   buttons beside it stay on one vertical line down the whole tree. */
+.lin-disp-slot {
+  display: flex;
+  justify-content: flex-end;
+  width: 94px;
+  flex-shrink: 0;
+  margin-right: 4px;
 }
 .lin-actions .icon-btn {
   width: 26px;
@@ -1432,6 +1512,91 @@ select.input {
   border-color: var(--accent);
   color: var(--accent);
   border-style: solid;
+}
+
+/* ---------- Dispatch ---------- */
+/* The app's namesake action, so it reads as a button with a name on it
+   rather than one more glyph in the icon row. */
+.lin-dispatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.lin-dispatch:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.lin-dispatch:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.disp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+/* Indentation lives inside the row, never as row padding: the pills on
+   the right must stay on one edge however deep the adaptation sits. */
+.disp-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  margin-left: calc(var(--disp-depth, 0) * 18px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.disp-row:hover {
+  border-color: var(--accent);
+}
+.disp-row.is-blocked {
+  opacity: 0.55;
+  cursor: default;
+}
+.disp-row.is-blocked:hover {
+  border-color: var(--border);
+}
+.disp-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.disp-row-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.disp-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-wash);
+  color: var(--warning);
 }
 
 /* ---------- Field kind picker (new field) ---------- */

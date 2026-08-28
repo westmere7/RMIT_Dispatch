@@ -13,6 +13,51 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * Zero-width space — a place for the caret to stand.
+ *
+ * An atomic embed is `contenteditable="false"`, so the browser will not
+ * put a caret next to it unless there is a TEXT NODE on that side. A
+ * field that fills a whole line therefore had no reachable "before" or
+ * "after": you could not type in front of it or behind it at all. Each
+ * such gap gets an anchor holding one of these, and the model never sees
+ * it — `modelLength` counts it as nothing, so every offset in the file
+ * stays a true model offset.
+ */
+const ZWSP = '\u200b';
+const ZWSP_RE = /\u200b/g;
+
+/** A text node's length as the MODEL sees it: caret anchors are nothing. */
+function modelLength(node: Node): number {
+  const text = node.textContent ?? '';
+  return text.includes(ZWSP) ? text.replace(ZWSP_RE, '').length : text.length;
+}
+
+/** DOM offset within a text node, given a model offset into it. */
+function domOffsetFor(node: Node, modelOffset: number): number {
+  const text = node.textContent ?? '';
+  if (!text.includes(ZWSP)) return modelOffset;
+  let seen = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (seen === modelOffset && text[i] !== ZWSP) return i;
+    if (text[i] !== ZWSP) seen++;
+  }
+  return text.length;
+}
+
+/** Model offset within a text node, given a DOM offset into it. */
+function modelOffsetFor(node: Node, domOffset: number): number {
+  const text = node.textContent ?? '';
+  if (!text.includes(ZWSP)) return domOffset;
+  let seen = 0;
+  for (let i = 0; i < Math.min(domOffset, text.length); i++) {
+    if (text[i] !== ZWSP) seen++;
+  }
+  return seen;
+}
+
+const anchor = `<span data-anchor="1">${ZWSP}</span>`;
+
 /** Inline style + round-trip attributes for a node's own marks. */
 function markAttrs(
   n: { bold?: boolean; italic?: boolean; color?: string; size?: TextSize },
@@ -74,7 +119,16 @@ function renderNodes(
             : '';
         // The span's own marks style the whole embed; its children may
         // still carry marks of their own for parts of it.
-        return `<span class="${cls}" data-field="${esc(n.fieldId)}" data-dir="${dir}" data-para="${para}" data-path="${esc(
+        /*
+         * An embed with no ordinary text beside it is unreachable: the
+         * caret cannot stand against a `contenteditable="false"` element
+         * without a text node to sit in. Anchors fill exactly those gaps
+         * — a field on a line of its own gets one on each side — so
+         * text can be typed before and after it like anywhere else.
+         */
+        const lead = editable && (i === 0 || isFieldSpan(nodes[i - 1])) ? anchor : '';
+        const tail = editable && (i === nodes.length - 1 || isFieldSpan(nodes[i + 1])) ? anchor : '';
+        return `${lead}<span class="${cls}" data-field="${esc(n.fieldId)}" data-dir="${dir}" data-para="${para}" data-path="${esc(
           key,
         )}"${markAttrs(n, base)}${ce}${hint}>${renderNodes(
           n.children,
@@ -83,7 +137,7 @@ function renderNodes(
           para,
           here,
           entered,
-        )}</span>`;
+        )}</span>${tail}`;
       }
       return `<span data-t="1"${markAttrs(n, base)}>${esc(n.text)}</span>`;
     })
@@ -118,7 +172,9 @@ interface Marks {
 function parseInline(el: Node, marks: Marks, out: InlineNode[]): void {
   el.childNodes.forEach((child) => {
     if (child.nodeType === Node.TEXT_NODE) {
-      const text = child.textContent ?? '';
+      // A caret anchor's own zero-width space is not content; a character
+      // the user typed while standing in one is.
+      const text = (child.textContent ?? '').replace(ZWSP_RE, '');
       if (text) out.push({ text, ...marks } as TextNode);
       return;
     }
@@ -208,7 +264,7 @@ function offsetInPara(para: HTMLElement, node: Node, offset: number): number | n
   if (isElement) {
     const kids = Array.from(node.childNodes);
     for (let i = 0; i < Math.min(offset, kids.length); i++) {
-      inside += kids[i].textContent?.length ?? 0;
+      inside += modelLength(kids[i]);
     }
   }
 
@@ -217,14 +273,14 @@ function offsetInPara(para: HTMLElement, node: Node, offset: number): number | n
   let cur = walker.nextNode();
   while (cur) {
     if (!isElement) {
-      if (cur === node) return total + offset;
+      if (cur === node) return total + modelOffsetFor(cur, offset);
     } else {
       // Walking in document order: stop at the container's own text or
       // anything after it; everything before it counts.
       if (node.contains(cur)) break;
       if (node.compareDocumentPosition(cur) & Node.DOCUMENT_POSITION_FOLLOWING) break;
     }
-    total += cur.textContent?.length ?? 0;
+    total += modelLength(cur);
     cur = walker.nextNode();
   }
   if (isElement) return total + inside;
@@ -283,10 +339,15 @@ export function selectRange(root: HTMLElement | null, range: TextRange): boolean
     let last: Text | null = null;
     let cur = walker.nextNode() as Text | null;
     while (cur) {
-      const len = cur.textContent?.length ?? 0;
-      if (offset <= total + len) return { node: cur, offset: offset - total };
+      const len = modelLength(cur);
+      // A caret anchor holds no model text, so it can never be the node a
+      // model offset resolves to — skipping it keeps the caret in real
+      // text, where deletion and typing behave.
+      if (len > 0 && offset <= total + len) {
+        return { node: cur, offset: domOffsetFor(cur, offset - total) };
+      }
       total += len;
-      last = cur;
+      if (len > 0) last = cur;
       cur = walker.nextNode() as Text | null;
     }
     // Past the end (or an empty paragraph): clamp to what is there.
@@ -335,13 +396,112 @@ export function restoreSelectionSoon(
   requestAnimationFrame(tick);
 }
 
-/** Collapse the caret at the end of an element's text. */
+/**
+ * Collapse the caret at the end of an element's own text.
+ *
+ * Anchored to the last TEXT NODE, not to (element, childIndex): both are
+ * valid end positions, but editing commands like Backspace ignore the
+ * element form, so typing worked there while deleting did nothing. Text
+ * inside a nested embed is skipped — that part is not editable from here.
+ */
 export function caretAtEndOf(el: HTMLElement): void {
   const sel = window.getSelection();
   if (!sel) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) =>
+      (n.parentElement?.closest('[data-field]') ?? el) === el &&
+      !n.parentElement?.closest('[data-anchor]') &&
+      modelLength(n) > 0
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT,
+  });
+  let last: Text | null = null;
+  let cur = walker.nextNode() as Text | null;
+  while (cur) {
+    last = cur;
+    cur = walker.nextNode() as Text | null;
+  }
   const r = document.createRange();
-  r.selectNodeContents(el);
-  r.collapse(false);
+  if (last) {
+    r.setStart(last, last.textContent?.length ?? 0);
+    r.collapse(true);
+  } else {
+    r.selectNodeContents(el);
+    r.collapse(false);
+  }
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+/**
+ * Insert text at the caret with NO formatting whatsoever.
+ *
+ * Pasting from Word, a browser or another block otherwise carries the
+ * source's fonts, colours and weights into the document, where they win
+ * over the block's own styling and cannot be seen in the model. Only
+ * `text/plain` is ever read, and it is inserted through the browser's
+ * own editing command so the caret, the selection it replaces and the
+ * native undo stack all behave exactly as they do for typing.
+ *
+ * `singleLine` folds line breaks into spaces — for a field value, which
+ * is one run of text by definition.
+ */
+export function insertPlainText(text: string, singleLine = false): void {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  if (singleLine) {
+    document.execCommand('insertText', false, lines.join(' '));
+    return;
+  }
+  lines.forEach((line, i) => {
+    if (i > 0) document.execCommand('insertParagraph');
+    if (line) document.execCommand('insertText', false, line);
+  });
+}
+
+/**
+ * Put the caret immediately before or after an atomic embed.
+ *
+ * The browser cannot be relied on to do this: the embed is
+ * `contenteditable="false"` and carries `user-select: all`, so a click
+ * anywhere on it selects the whole thing instead of landing a caret, and
+ * a click in the blank space beside it gets snapped to the nearest
+ * VISIBLE position — past the caret anchor, which has none. Placing the
+ * selection explicitly is what makes the gap reachable.
+ *
+ * Prefers the anchor rendered for exactly this purpose, then any
+ * adjacent text, and falls back to a child-index position on the parent.
+ */
+export function caretBesideSpan(span: HTMLElement, before: boolean): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const sibling = before ? span.previousSibling : span.nextSibling;
+
+  /** Nearest text node in `n` on the side facing the embed. */
+  const facingText = (n: Node | null): Text | null => {
+    if (!n) return null;
+    if (n.nodeType === Node.TEXT_NODE) return n as Text;
+    const walker = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+    if (!before) return walker.nextNode() as Text | null;
+    let last: Text | null = null;
+    let cur = walker.nextNode() as Text | null;
+    while (cur) {
+      last = cur;
+      cur = walker.nextNode() as Text | null;
+    }
+    return last;
+  };
+
+  const r = document.createRange();
+  const text = facingText(sibling);
+  if (text) {
+    r.setStart(text, before ? (text.textContent?.length ?? 0) : 0);
+  } else {
+    const parent = span.parentNode;
+    if (!parent) return;
+    const index = Array.prototype.indexOf.call(parent.childNodes, span);
+    r.setStart(parent, before ? index : index + 1);
+  }
+  r.collapse(true);
   sel.removeAllRanges();
   sel.addRange(r);
 }

@@ -1,28 +1,39 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useCrumbs } from '../components/AppShell';
 import {
-  IconCheck,
+  IconDispatch,
   IconImage,
   IconLock,
   IconPencil,
-  IconTable,
   IconType,
   IconUnlock,
 } from '../components/Icons';
 import { useDialog } from '../components/Dialog';
+import { DispatchPanel, type DispatchArgs } from '../components/DispatchPanel';
 import { BlockInspector } from '../components/editor/BlockInspector';
 import { PageRail } from '../components/editor/PageRail';
-import { InsertFieldButton, ShapeMenu } from '../components/editor/ToolbarInsert';
+import {
+  InsertFieldButton,
+  InsertTableButton,
+  ShapeMenu,
+} from '../components/editor/ToolbarInsert';
 import type { SpanClickInfo } from '../editor/BlockFrame';
 import { EditorCanvas } from '../editor/EditorCanvas';
 import { EditorProvider, useEditor } from '../editor/EditorProvider';
 import {
   WorkspaceContext,
+  type ActiveCell,
   type ActiveSpan,
   type InspectorTab,
   type WorkspaceCtx,
 } from '../editor/workspaceContext';
+import {
+  buildDispatchTargets,
+  summariseDispatch,
+  versionName,
+  type DispatchTarget,
+} from '../lib/dispatch';
 import {
   applySyncDown,
   collectUpstream,
@@ -39,6 +50,7 @@ import {
   heartbeatLock,
   releaseLock,
 } from '../store/documents';
+import { fetchDispatchCandidates, runDispatch } from '../store/dispatch';
 import { fetchDraft, saveDraft } from '../store/drafts';
 import { gcMedia } from '../store/mediagc';
 import { fetchFieldsForProject, updateFieldValue } from '../store/fields';
@@ -171,6 +183,7 @@ function WorkspaceLoaded(props: {
     return wanted && TAB_NAMES.includes(wanted) ? wanted : 'sync';
   });
   const [activeSpan, setActiveSpan] = useState<ActiveSpan | null>(null);
+  const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
   const [versionsKey, setVersionsKey] = useState(0);
 
   const fieldMap = useMemo(() => toFieldMap(fields), [fields]);
@@ -299,6 +312,8 @@ function WorkspaceLoaded(props: {
         setTab={setTab}
         activeSpan={activeSpan}
         setActiveSpan={setActiveSpan}
+        activeCell={activeCell}
+        setActiveCell={setActiveCell}
         versionsKey={versionsKey}
         bumpVersions={() => setVersionsKey((k) => k + 1)}
         initialHistory={initialHistory}
@@ -331,6 +346,8 @@ function WorkspaceInner({
   setTab,
   activeSpan,
   setActiveSpan,
+  activeCell,
+  setActiveCell,
   versionsKey,
   bumpVersions,
   initialHistory,
@@ -354,6 +371,8 @@ function WorkspaceInner({
   setTab: (t: InspectorTab) => void;
   activeSpan: ActiveSpan | null;
   setActiveSpan: (s: ActiveSpan | null) => void;
+  activeCell: ActiveCell | null;
+  setActiveCell: (c: ActiveCell | null) => void;
   versionsKey: number;
   bumpVersions: () => void;
   initialHistory: Page[][] | null;
@@ -361,7 +380,8 @@ function WorkspaceInner({
   const { user } = useAuth();
   const { canEdit } = useSpaces();
   const { setCrumbs } = useCrumbs();
-  const { state, dispatch, flush, undo, redo } = useEditor();
+  const navigate = useNavigate();
+  const { state, dispatch, flush, isDirty, undo, redo } = useEditor();
 
   // Seed the undo stack once the cloud history has loaded.
   useEffect(() => {
@@ -498,6 +518,11 @@ function WorkspaceInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id]);
 
+  /** Dispatch panel: open, its targets (null while loading), running. */
+  const [dispatchOpen, setDispatchOpen] = useState(false);
+  const [dispatchTargets, setDispatchTargets] = useState<DispatchTarget[] | null>(null);
+  const [dispatchBusy, setDispatchBusy] = useState(false);
+
   /* ---------- Pending upstream ---------- */
   const pendingUpstream = useMemo(
     () => (isLockHolder ? collectUpstream(state.pages, fieldMap) : { fields: [], blocks: [] }),
@@ -559,36 +584,144 @@ function WorkspaceInner({
     setDoc((d) => ({ ...d, lock: null }));
   }, [doc.id, user, saveNow, setDoc]);
 
-  const finalize = useCallback(async () => {
+  /* ---------- Dispatch ---------- */
+  /**
+   * Finalising IS a dispatch: the version is the thing the adaptations
+   * end up following, so naming it and choosing who receives it belong in
+   * the same step. The panel loads the lineage when it opens — the editor
+   * only knows its own parent, never its children.
+   */
+  const openDispatch = useCallback(() => {
     if (!user) return;
-    const label = await dialog.prompt('Finalize this version', {
-      message:
-        'Writes an immutable snapshot, applies pending upstream field changes and releases the lock.',
-      confirmLabel: 'Finalize',
-    });
-    if (label === null) return; // cancelled
-    await saveNow();
-    try {
-      await createVersion({
-        documentId: doc.id,
-        number: doc.versionCount + 1,
-        label: label?.trim() || undefined,
-        userId: user.uid,
-        userName: user.displayName,
-        pages: pagesRef.current,
+    setDispatchOpen(true);
+    setDispatchTargets(null);
+    void fetchDispatchCandidates(doc.projectId)
+      .then((candidates) =>
+        setDispatchTargets(buildDispatchTargets(doc.id, candidates, user.uid, Date.now())),
+      )
+      .catch((e) => {
+        console.error('dispatch targets failed', e);
+        setDispatchTargets([]);
       });
-      await releaseLock(doc.id, user.uid);
-      setDoc((d) => ({
-        ...d,
-        lock: null,
-        versionCount: d.versionCount + 1,
-      }));
-      bumpVersions();
-    } catch (e) {
-      console.error(e);
-      await dialog.alert('Finalize failed', { message: String(e) });
-    }
-  }, [doc.id, doc.versionCount, user, saveNow, setDoc, bumpVersions, dialog]);
+  }, [doc.id, doc.projectId, user]);
+
+  const confirmDispatch = useCallback(
+    async ({ label, targetIds }: DispatchArgs) => {
+      if (!user) return;
+      setDispatchBusy(true);
+      // Pending up / two-way edits reach the fields here, so the dispatch
+      // that follows sends the values as they now stand.
+      await saveNow();
+      try {
+        await createVersion({
+          documentId: doc.id,
+          number: doc.versionCount + 1,
+          label: label || undefined,
+          userId: user.uid,
+          userName: user.displayName,
+          pages: pagesRef.current,
+        });
+        await releaseLock(doc.id, user.uid);
+        setDoc((d) => ({
+          ...d,
+          lock: null,
+          versionCount: d.versionCount + 1,
+        }));
+        bumpVersions();
+      } catch (e) {
+        console.error(e);
+        setDispatchBusy(false);
+        await dialog.alert('Could not create the version', { message: String(e) });
+        return;
+      }
+
+      const chosen = (dispatchTargets ?? [])
+        .filter((t) => targetIds.includes(t.doc.id))
+        .map((t) => t.doc);
+      let summary: string | null = null;
+      if (chosen.length > 0) {
+        try {
+          const outcomes = await runDispatch({
+            projectId: doc.projectId,
+            spaceId: project.spaceId,
+            source: { id: doc.id, pages: pagesRef.current },
+            targets: chosen,
+            userId: user.uid,
+          });
+          summary = summariseDispatch(outcomes);
+        } catch (e) {
+          console.error(e);
+          setDispatchBusy(false);
+          await dialog.alert('Dispatch failed', { message: String(e) });
+          return;
+        }
+      }
+      setDispatchBusy(false);
+      setDispatchOpen(false);
+      await dialog.alert(`${versionName(doc.versionCount + 1, label || null)} created`, {
+        message: summary
+          ? `Dispatched to ${chosen.length} adaptation(s): ${summary}`
+          : 'No adaptations were dispatched to.',
+      });
+    },
+    [
+      doc.id,
+      doc.projectId,
+      doc.versionCount,
+      project.spaceId,
+      dispatchTargets,
+      user,
+      saveNow,
+      setDoc,
+      bumpVersions,
+      dialog,
+    ],
+  );
+
+  /**
+   * Warn before an in-app link carries the user out of an edit.
+   *
+   * `beforeunload` (EditorProvider) covers closing the tab; it cannot
+   * see a route change. React Router is mounted as a `BrowserRouter`,
+   * which has no blocker API, so the guard watches link clicks instead
+   * — that is how the workspace is actually left, via the breadcrumbs
+   * or the nav.
+   *
+   * Pending UPSTREAM counts as unsaved even when the draft is clean:
+   * `up` and `two-way` edits only reach their fields on Save, Stop
+   * editing or Dispatch, so walking away silently drops them.
+   */
+  const pendingCountRef = useRef(0);
+  pendingCountRef.current = pendingUpstream.fields.length + pendingUpstream.blocks.length;
+
+  useEffect(() => {
+    if (!isLockHolder) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+      const link = (e.target as HTMLElement | null)?.closest('a[href]') as HTMLAnchorElement | null;
+      if (!link || link.target === '_blank' || link.hasAttribute('download')) return;
+      const url = new URL(link.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (url.pathname + url.search === window.location.pathname + window.location.search) return;
+      const pending = pendingCountRef.current;
+      if (!isDirty() && pending === 0) return;
+
+      e.preventDefault();
+      void (async () => {
+        const ok = await dialog.confirm('Leave with unsaved changes?', {
+          message: pending
+            ? `${pending} upstream change(s) have not been applied yet, and recent edits may not have reached the server. Leaving saves them first.`
+            : 'Recent edits may not have reached the server yet. Leaving saves them first.',
+          confirmLabel: 'Save and leave',
+        });
+        if (!ok) return;
+        await saveNow();
+        navigate(url.pathname + url.search);
+      })();
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [isLockHolder, isDirty, saveNow, dialog, navigate]);
 
   /* ---------- Lock status ---------- */
   const lockStale =
@@ -623,6 +756,8 @@ function WorkspaceInner({
     setTab,
     activeSpan,
     setActiveSpan,
+    activeCell,
+    setActiveCell,
     saveNow,
     versionsKey: versionsKey,
   };
@@ -668,12 +803,7 @@ function WorkspaceInner({
                 >
                   <IconType size={13} /> Text
                 </button>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => dispatch({ type: 'ADD_BLOCK', pageId: currentPage.id, blockType: 'table' })}
-                >
-                  <IconTable size={13} /> Table
-                </button>
+                <InsertTableButton pageId={currentPage.id} />
                 <button
                   className="btn btn-sm"
                   onClick={() => dispatch({ type: 'ADD_BLOCK', pageId: currentPage.id, blockType: 'image' })}
@@ -713,8 +843,8 @@ function WorkspaceInner({
                 <button className="btn btn-sm" onClick={() => void stopEditing()}>
                   <IconUnlock size={13} /> Stop editing
                 </button>
-                <button className="btn btn-sm btn-primary" onClick={() => void finalize()}>
-                  <IconCheck size={13} /> Finalize
+                <button className="btn btn-sm btn-primary" onClick={openDispatch}>
+                  <IconDispatch size={13} /> Dispatch
                 </button>
               </>
             )}
@@ -723,6 +853,18 @@ function WorkspaceInner({
         </div>
         <BlockInspector />
       </div>
+
+      {dispatchOpen && (
+        <DispatchPanel
+          source={doc}
+          mode="version"
+          targets={dispatchTargets ?? []}
+          loading={dispatchTargets === null}
+          onDispatch={(a) => void confirmDispatch(a)}
+          onClose={() => !dispatchBusy && setDispatchOpen(false)}
+          busy={dispatchBusy}
+        />
+      )}
     </WorkspaceContext.Provider>
   );
 }

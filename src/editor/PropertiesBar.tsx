@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FieldMenu } from '../components/editor/FieldMenu';
+import { TableBar } from '../components/editor/TableBar';
 import {
   ImageProps,
   SIZES,
   ShapeProps,
-  TableProps,
+  activeEditorRoot,
   liveRangeFor,
 } from '../components/editor/BlockProps';
 import {
@@ -26,19 +27,23 @@ import {
   IconUnlink,
 } from '../components/Icons';
 import { FieldPicker } from '../components/editor/FieldPicker';
-import { blockTarget } from '../lib/fieldtypes';
+import { blockTarget, type FieldTarget } from '../lib/fieldtypes';
 import { rangeFromSelection, restoreSelectionSoon } from '../lib/richdom';
+import { emptyRich } from '../lib/richtext';
+import { isContentLocked } from '../lib/syncfields';
+import { cellFormatAt, cellsIn, setCellContent, setCellFormat, tableSize } from '../lib/tables';
 import { SIZE_LABEL } from '../lib/textsize';
 import {
   applyMark,
   applyMarkAll,
+  plainText,
   rangeHasMark,
   rangeSize,
   richHasMark,
   type MarkPatch,
   type TextRange,
 } from '../lib/richtext';
-import type { Block, RichText, TextAlign, TextBlock, TextSize } from '../types';
+import type { Block, RichText, TableBlock, TextAlign, TextSize } from '../types';
 import { useEditor } from './EditorProvider';
 import { useFieldOps } from './useFieldOps';
 import { useWorkspace } from './workspaceContext';
@@ -103,12 +108,10 @@ function BarPopover({
 }
 
 /** The live text selection inside a block's on-canvas editor. */
-function canvasRoot(blockId: string): HTMLElement | null {
-  return document.querySelector(`[data-block-id="${blockId}"] .inline-editor-body`);
-}
+const canvasRoot = activeEditorRoot;
 
 export function PropertiesBar({ enteredField }: { enteredField?: string | null }) {
-  const { state, readOnly, currentPage } = useEditor();
+  const { state, dispatch, readOnly, currentPage } = useEditor();
   // Nothing here does anything without the lock, so in view-only mode the
   // bar is not shown at all and the canvas gets the row back.
   if (!currentPage || readOnly) return null;
@@ -122,8 +125,11 @@ export function PropertiesBar({ enteredField }: { enteredField?: string | null }
   // the click that started the edit changed the selection.
   const single = editing ?? (blocks.length === 1 ? blocks[0] : undefined);
 
+  const table = single?.type === 'table' ? single : null;
+
   return (
-    <div className="canvas-format-bar properties-bar">
+    <div className="properties-stack">
+      <div className="canvas-format-bar properties-bar">
       {!single && blocks.length === 0 && (
         <>
           <span className="pb-kind">
@@ -150,6 +156,24 @@ export function PropertiesBar({ enteredField }: { enteredField?: string | null }
           editing={!!editing}
           enteredField={enteredField}
         />
+      )}
+      </div>
+
+      {/* A table's own controls get a row of their own: crowded into the
+          text row they pushed the formatting buttons off the end. */}
+      {table && !readOnly && (
+        <div className="canvas-format-bar properties-bar table-bar">
+          <span className="pb-kind">
+            <IconTable size={12} /> Table
+          </span>
+          <TableBar
+            block={table}
+            pageId={currentPage.id}
+            update={(p) =>
+              dispatch({ type: 'UPDATE_BLOCK', pageId: currentPage.id, blockId: table.id, patch: p })
+            }
+          />
+        </div>
       )}
     </div>
   );
@@ -232,29 +256,28 @@ function SingleControls({
 
       {block.type === 'text' && (
         <TextControls
-          block={block}
-          pageId={pageId}
+          blockId={block.id}
+          rich={block.body}
+          setRich={(body) => update({ body } as Partial<Block>)}
+          locked={readOnly || isContentLocked(block.binding)}
+          size={block.size}
+          setSize={(size, cleared) => update({ size, body: cleared } as Partial<Block>)}
+          align={block.align}
+          setAlign={(a) => update({ align: a } as Partial<Block>)}
           editing={editing}
           enteredField={enteredField}
         />
       )}
 
+      {/* A cell is text, so it gets the very same controls — aimed at
+          whichever cell the author last clicked. */}
       {block.type === 'table' && (
-        <>
-          <span className="bar-sep" />
-          <label className="pb-check">
-            <input
-              type="checkbox"
-              checked={block.headerRow}
-              disabled={readOnly}
-              onChange={(e) => update({ headerRow: e.target.checked } as Partial<Block>)}
-            />
-            Header row
-          </label>
-          <BarPopover label="Cells" icon={<IconTable size={12} />} wide>
-            <TableProps block={block} update={update} pageId={pageId} />
-          </BarPopover>
-        </>
+        <TableTextControls
+          block={block}
+          update={update}
+          editing={editing}
+          enteredField={enteredField}
+        />
       )}
 
       {block.type === 'image' && (
@@ -386,28 +409,104 @@ function BlockSync({ block, pageId }: { block: Block; pageId: string }) {
 }
 
 /**
- * Text controls: character formatting applies to the live selection, or
- * to the whole block when there is none — the word-processor rule, and
- * the reason these live in a bar rather than a side panel.
+ * The text controls, aimed at the table cells the author last selected.
+ *
+ * Alignment and size are written to the CELL rather than to its runs:
+ * a paragraph's line box is at least as tall as its own font-size, so
+ * setting a size on runs alone leaves small text sitting in a tall line
+ * — the "why is the leading bigger when the text is smaller" bug. A
+ * text block puts its size on the block for exactly the same reason.
  */
-function TextControls({
+function TableTextControls({
   block,
-  pageId,
+  update,
   editing,
   enteredField,
 }: {
-  block: TextBlock;
-  pageId: string;
+  block: TableBlock;
+  update: (p: Partial<Block>) => void;
+  editing: boolean;
+  enteredField?: string | null;
+}) {
+  const { readOnly } = useEditor();
+  const { activeCell } = useWorkspace();
+  const { rows: nRows, cols: nCols } = tableSize(block);
+  const sel = activeCell?.blockId === block.id ? activeCell : null;
+  const clampR = (v: number) => Math.min(Math.max(0, v), Math.max(0, nRows - 1));
+  const clampC = (v: number) => Math.min(Math.max(0, v), Math.max(0, nCols - 1));
+  const r = clampR(sel?.row ?? 0);
+  const c = clampC(sel?.col ?? 0);
+  const range = cellsIn({ row: r, col: c }, { row: clampR(sel?.toRow ?? r), col: clampC(sel?.toCol ?? c) });
+
+  const rich = block.rows[r]?.[c] ?? emptyRich();
+  const fmt = cellFormatAt(block, r, c);
+  const cellBinding = block.cellBindings?.find((b) => b.row === r && b.col === c);
+
+  return (
+    <TextControls
+      blockId={block.id}
+      rich={rich}
+      setRich={(next) => update({ rows: setCellContent(block, r, c, next) } as Partial<Block>)}
+      locked={readOnly || isContentLocked(block.binding) || isContentLocked(cellBinding)}
+      // A field embedded here belongs to this cell, not to running text.
+      fieldTarget="tableCell"
+      size={fmt?.size}
+      setSize={(size, cleared) =>
+        update({
+          cellFormats: setCellFormat(block, range, { size }),
+          rows: setCellContent(block, r, c, cleared),
+        } as Partial<Block>)
+      }
+      align={fmt?.align}
+      setAlign={(a) => update({ cellFormats: setCellFormat(block, range, { align: a }) } as Partial<Block>)}
+      editing={editing}
+      enteredField={enteredField}
+    />
+  );
+}
+
+/**
+ * Text controls: character formatting applies to the live selection, or
+ * to the whole of what is being edited when there is none — the
+ * word-processor rule, and the reason these live in a bar rather than a
+ * side panel.
+ *
+ * They take the TEXT rather than a text block, because a table cell is
+ * text too: selecting a table and clicking a cell has to reach the same
+ * bold, colour, size and field controls as any other copy in the
+ * document.
+ */
+function TextControls({
+  blockId,
+  rich,
+  setRich,
+  locked,
+  fieldTarget = 'inline',
+  size,
+  setSize,
+  align,
+  setAlign,
+  editing,
+  enteredField,
+}: {
+  blockId: string;
+  rich: RichText;
+  setRich: (r: RichText) => void;
+  locked: boolean;
+  /** Where an embed created here lands — a cell is not running text. */
+  fieldTarget?: FieldTarget;
+  size?: TextSize;
+  setSize?: (size: TextSize, cleared: RichText) => void;
+  align?: TextAlign;
+  setAlign?: (a: TextAlign) => void;
   editing: boolean;
   enteredField?: string | null;
 }) {
   const { dispatch, readOnly } = useEditor();
   const { fieldMap } = useWorkspace();
-  const boundDown = block.binding && block.binding.direction !== 'up';
-  const locked = readOnly || !!boundDown;
 
-  const setBody = (body: RichText) =>
-    dispatch({ type: 'UPDATE_BLOCK', pageId, blockId: block.id, patch: { body } });
+  const setBody = setRich;
+  const block = { id: blockId, body: rich, align, size };
 
   const range = () => liveRangeFor(block.id, undefined);
 
@@ -427,23 +526,38 @@ function TextControls({
     const r = range();
     mark({ [m]: !(r ? rangeHasMark(block.body, r, m) : richHasMark(block.body, m)) });
   };
-  const applySize = (size: TextSize) => {
+  /**
+   * Selecting ALL of the text and picking a size means the same thing as
+   * picking one with nothing selected, so both set the container's size
+   * rather than marking runs.
+   *
+   * That is not a nicety. A paragraph's line box is at least as tall as
+   * the paragraph's own font-size, so runs marked small inside a
+   * normal-size paragraph sit in a tall line and read as though the
+   * leading had been opened up — which is exactly what select-all-then-
+   * shrink produced in a table cell.
+   */
+  const coversEverything = (r: TextRange | null): boolean =>
+    !r || (block.body.length === 1 && r.para === 0 && r.start === 0 && r.end >= plainText(block.body).length);
+
+  const applySize = (next: TextSize) => {
     const r = range();
-    if (r) {
-      setBody(applyMark(block.body, r, { size }));
+    if (r && !coversEverything(r)) {
+      setBody(applyMark(block.body, r, { size: next }));
       keep(r);
       return;
     }
-    dispatch({
-      type: 'UPDATE_BLOCK',
-      pageId,
-      blockId: block.id,
-      patch: { size, body: applyMarkAll(block.body, { size: undefined }) },
-    });
+    // The container carries the size and its runs are cleared, so the
+    // text reads evenly and the line box matches what is in it.
+    const cleared = applyMarkAll(block.body, { size: undefined });
+    if (setSize) setSize(next, cleared);
+    else setBody(applyMarkAll(block.body, { size: next }));
+    if (r) keep(r);
   };
   const activeSize = (): TextSize => {
     const r = range();
-    return (r ? rangeSize(block.body, r) : null) ?? block.size ?? 'md';
+    if (r && !coversEverything(r)) return rangeSize(block.body, r) ?? block.size ?? 'md';
+    return block.size ?? 'md';
   };
 
   return (
@@ -527,36 +641,39 @@ function TextControls({
         ))}
       </div>
 
-      <span className="bar-sep" />
-      <div className="segmented" style={{ padding: 2 }}>
-        {(
-          [
-            ['left', IconAlignLeft],
-            ['center', IconAlignCenter],
-            ['right', IconAlignRight],
-          ] as [TextAlign, typeof IconAlignLeft][]
-        ).map(([a, Icon]) => (
-          <button
-            key={a}
-            className={(block.align ?? 'left') === a ? 'active' : ''}
-            style={{ height: 22, padding: '0 7px' }}
-            aria-label={`Align ${a}`}
-            disabled={readOnly}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() =>
-              dispatch({ type: 'UPDATE_BLOCK', pageId, blockId: block.id, patch: { align: a } })
-            }
-          >
-            <Icon size={12} />
-          </button>
-        ))}
-      </div>
+      {setAlign && (
+        <>
+          <span className="bar-sep" />
+          <div className="segmented" style={{ padding: 2 }}>
+            {(
+              [
+                ['left', IconAlignLeft],
+                ['center', IconAlignCenter],
+                ['right', IconAlignRight],
+              ] as [TextAlign, typeof IconAlignLeft][]
+            ).map(([a, Icon]) => (
+              <button
+                key={a}
+                className={(block.align ?? 'left') === a ? 'active' : ''}
+                style={{ height: 22, padding: '0 7px' }}
+                aria-label={`Align ${a}`}
+                disabled={readOnly}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setAlign(a)}
+              >
+                <Icon size={12} />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       {!locked && (
         <>
           <span className="bar-sep" />
           <FieldMenu
             compact
+            target={fieldTarget}
             getRange={() => rangeFromSelection(canvasRoot(block.id))}
             rich={block.body}
             onRich={setBody}
@@ -579,7 +696,7 @@ function TextControls({
             title="Edit the text on the canvas"
             onClick={() => dispatch({ type: 'EDIT_TEXT', blockId: block.id })}
           >
-            Edit text
+            Edit
           </button>
         )
       )}

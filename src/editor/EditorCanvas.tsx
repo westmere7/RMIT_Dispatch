@@ -6,11 +6,14 @@ import {
   IconZoomIn,
   IconZoomOut,
 } from '../components/Icons';
+import { liveRangeFor } from '../components/editor/BlockProps';
 import { FieldEditorDialog } from '../components/editor/FieldEditorDialog';
+import { NewTablePanel } from '../components/editor/NewTablePanel';
 import type { InlineEditorHandle } from '../components/editor/InlineTextEditor';
 import { canvasAspect } from '../grid/presets';
+import { isContentLocked } from '../lib/syncfields';
 import { useSize } from '../lib/useSize';
-import type { RichText, SyncField } from '../types';
+import type { Block, SyncField } from '../types';
 import type { SpanClickInfo } from './BlockFrame';
 import { CanvasContextMenu, type CanvasTarget } from './CanvasContextMenu';
 import { useEditor } from './EditorProvider';
@@ -43,6 +46,8 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
   );
   const [menu, setMenu] = useState<CanvasTarget | null>(null);
   const [fieldEdit, setFieldEdit] = useState<SyncField | null>(null);
+  /** The insert-a-table panel, opened from the canvas menu. */
+  const [newTable, setNewTable] = useState(false);
   const { onBlockPointerDown, onHandlePointerDown } = useDragResize(surfaceRef);
   const editingId = state.editingBlockId;
   /** Which embed is open for text editing, shown in the properties bar. */
@@ -66,8 +71,7 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
       // Enter opens inline text editing for a single selected text block.
       if (e.key === 'Enter' && sel.length === 1) {
         const b = page.blocks.find((x) => x.id === sel[0]);
-        const locked = b?.binding && b.binding.direction !== 'up';
-        if (b?.type === 'text' && !locked) {
+        if (b?.type === 'text' && !isContentLocked(b.binding)) {
           e.preventDefault();
           dispatch({ type: 'EDIT_TEXT', blockId: b.id });
         }
@@ -109,16 +113,17 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
     return () => window.removeEventListener('keydown', onKey, true);
   }, [editingId, dispatch]);
 
-  const setBody = useCallback(
-    (blockId: string, body: RichText) => {
+  const setContent = useCallback(
+    (blockId: string, patch: Partial<Block>) => {
       if (!currentPage) return;
-      // A burst of typing in one block is a single undo step.
+      // A burst of typing in one block is a single undo step — a table
+      // cell included, since the patch is still one block's content.
       dispatch({
         type: 'UPDATE_BLOCK',
         pageId: currentPage.id,
         blockId,
-        patch: { body },
-        coalesce: `text:${blockId}`,
+        patch,
+        coalesce: `content:${blockId}`,
       });
     },
     [currentPage, dispatch],
@@ -170,7 +175,7 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
               onSpanClick={onSpanClick}
               onEnteredField={setEnteredField}
             onStartEdit={(blockId) => dispatch({ type: 'EDIT_TEXT', blockId })}
-            onBodyChange={setBody}
+            onContentChange={setContent}
             onBlockContextMenu={(e, blockId, fieldId) => {
               if (!state.selection.includes(blockId)) dispatch({ type: 'SELECT', ids: [blockId] });
               setMenu({
@@ -178,7 +183,9 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
                 y: e.clientY,
                 blockId,
                 fieldId,
-                range: inlineRef.current?.getRange() ?? null,
+                // A table has one editor per cell, so the text block's
+                // own ref cannot answer for it.
+                range: liveRangeFor(blockId, inlineRef.current?.getRange()),
               });
             }}
             onSurfaceContextMenu={(e) =>
@@ -194,6 +201,16 @@ export function EditorCanvas({ onSpanClick }: { onSpanClick?: (info: SpanClickIn
           target={menu}
           onClose={() => setMenu(null)}
           onEditField={(f) => setFieldEdit(f)}
+          onInsertTable={() => setNewTable(true)}
+        />
+      )}
+      {newTable && currentPage && (
+        <NewTablePanel
+          onClose={() => setNewTable(false)}
+          onCreate={(table) => {
+            setNewTable(false);
+            dispatch({ type: 'ADD_BLOCK', pageId: currentPage.id, blockType: 'table', table });
+          }}
         />
       )}
       {fieldEdit && (

@@ -56,6 +56,12 @@ export function pageMediaPaths(pages: Page[]): string[] {
   for (const page of pages) {
     for (const b of page.blocks) {
       if (b.type === 'image' && b.storagePath) out.push(b.storagePath);
+      // A picture inside a table cell is referenced from the block, not
+      // from an image block — missed here, the collector would delete a
+      // file the document is still showing.
+      if (b.type === 'table') {
+        for (const img of b.cellImages ?? []) if (img.storagePath) out.push(img.storagePath);
+      }
     }
   }
   return out;
@@ -218,6 +224,22 @@ export function copyBlockContent(target: Block, source: Block): Block {
   return target;
 }
 
+/**
+ * Is a bound target's own content read-only in place?
+ *
+ * ONLY `down` is: its content mirrors the field, so an edit here would be
+ * overwritten by the next `applySyncDown`. `up` and `two-way` are authored
+ * locally and pushed to the field by `collectUpstream` (which collects
+ * every binding whose direction is not `down`) — locking them made the
+ * block you had just promoted to a field uneditable, in the master
+ * document where its wording is supposed to be written. This is the same
+ * rule inline embeds already follow: `useSpanEntry` refuses entry to
+ * `down` spans only.
+ */
+export function isContentLocked(binding?: { direction?: SyncDirection } | null): boolean {
+  return !!binding && (binding.direction ?? 'down') === 'down';
+}
+
 export function applySyncDown(
   pages: Page[],
   fields: FieldMap,
@@ -268,11 +290,12 @@ export function applySyncDown(
         b = { ...b, body: b.body.map((para) => refreshNodes(para, fields, new Set())) };
       }
 
-      // 3) Tables: cell bindings + spans inside cells.
+      // 3) Tables: cell bindings, spans inside cells, and cell images.
       if (b.type === 'table') {
-        const rows = b.rows.map((row, ri) =>
+        const table = b;
+        const rows = table.rows.map((row, ri) =>
           row.map((cell, ci) => {
-            const cb = b.type === 'table' ? b.cellBindings?.find((c) => c.row === ri && c.col === ci) : undefined;
+            const cb = table.cellBindings?.find((c) => c.row === ri && c.col === ci);
             if (cb && cb.direction !== 'up') {
               const resolved = resolveFieldInline(cb.fieldId, fields);
               if (resolved) return [resolved];
@@ -280,7 +303,22 @@ export function applySyncDown(
             return cell.map((para) => refreshNodes(para, fields, new Set()));
           }),
         );
-        b = { ...b, rows };
+        // A picture in a cell follows an image field exactly as an image
+        // BLOCK does — otherwise a logo swapped in the master would
+        // reach every adaptation except the ones inside tables.
+        const cellImages = table.cellImages?.map((img) => {
+          if (!img.fieldId || img.direction === 'up') return img;
+          const field = fields.get(img.fieldId);
+          const value = field ? valueAsImage(field.value) : null;
+          if (!value) return img;
+          return {
+            ...img,
+            storagePath: value.storagePath,
+            alt: value.alt ?? img.alt,
+            fit: value.fit ?? img.fit,
+          };
+        });
+        b = { ...table, rows, ...(cellImages ? { cellImages } : {}) };
       }
 
       return b;
@@ -399,6 +437,24 @@ export function collectUpstream(pages: Page[], fields: FieldMap): UpstreamChange
         for (const para of block.body) collectSpanUpstream(para, fields, fieldChanges);
       }
       if (block.type === 'table') {
+        for (const img of block.cellImages ?? []) {
+          if (!img.fieldId || (img.direction ?? 'down') === 'down') continue;
+          const field = fields.get(img.fieldId);
+          if (!field) continue;
+          const value = valueAsImage(field.value);
+          const changed =
+            !value ||
+            value.storagePath !== img.storagePath ||
+            (value.alt ?? '') !== (img.alt ?? '');
+          if (changed) {
+            fieldChanges.set(field.id, {
+              fieldId: field.id,
+              fieldName: field.name,
+              value: { kind: 'image', storagePath: img.storagePath, alt: img.alt, fit: img.fit },
+              preview: img.alt || 'cell image',
+            });
+          }
+        }
         block.rows.forEach((row, ri) =>
           row.forEach((cell, ci) => {
             const cb = block.cellBindings?.find((c) => c.row === ri && c.col === ci);
@@ -431,8 +487,27 @@ export interface FieldUsage {
   fieldId: string;
   blockId: string;
   pageId: string;
-  kind: 'span' | 'block' | 'cell';
+  kind: 'span' | 'block' | 'cell' | 'cellImage';
   direction: SyncDirection;
+}
+
+/**
+ * How many embeds in this document TAKE their content from upstream —
+ * field embeds (span / block / cell) plus blocks that follow a block in
+ * the parent document. `up` embeds only ever push, so they are not
+ * counted: a document made only of them receives nothing, and a dispatch
+ * to it cannot change a thing.
+ */
+export function inboundSyncCount(pages: Page[]): number {
+  let n = collectUsages(pages).filter((u) => u.direction !== 'up').length;
+  for (const page of pages) {
+    for (const block of page.blocks) {
+      // Bound to the PARENT's block rather than to a field: not a field
+      // usage, so `collectUsages` skips it, but it follows all the same.
+      if (block.binding && !block.binding.fieldId && block.binding.direction !== 'up') n += 1;
+    }
+  }
+  return n;
 }
 
 export function collectUsages(pages: Page[]): FieldUsage[] {
@@ -469,6 +544,18 @@ export function collectUsages(pages: Page[]): FieldUsage[] {
         block.cellBindings?.forEach((cb) =>
           out.push({ fieldId: cb.fieldId, blockId: block.id, pageId: page.id, kind: 'cell', direction: cb.direction }),
         );
+        // A picture in a cell can follow an image field, and a usage the
+        // where-used list misses is a field that looks safe to delete.
+        block.cellImages?.forEach((img) => {
+          if (!img.fieldId) return;
+          out.push({
+            fieldId: img.fieldId,
+            blockId: block.id,
+            pageId: page.id,
+            kind: 'cellImage',
+            direction: img.direction ?? 'down',
+          });
+        });
         block.rows.forEach((row) => row.forEach((cell) => cell.forEach((para) => walkNodes(para, block.id, page.id))));
       }
     }

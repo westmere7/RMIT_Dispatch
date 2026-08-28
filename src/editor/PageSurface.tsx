@@ -1,7 +1,7 @@
 import { forwardRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { InlineEditorHandle } from '../components/editor/InlineTextEditor';
 import { canvasAspect, effectiveColumns, marginFractions, pageDimsMm } from '../grid/presets';
-import type { GridConfig, Page, RichText } from '../types';
+import type { Block, GridConfig, Page } from '../types';
 import { BlockFrame, type SpanClickInfo } from './BlockFrame';
 import type { ResizeCorner } from './useDragResize';
 
@@ -23,7 +23,7 @@ export const PageSurface = forwardRef<HTMLDivElement, {
   onSpanClick?: (info: SpanClickInfo) => void;
   onEnteredField?: (fieldId: string | null) => void;
   onStartEdit?: (blockId: string) => void;
-  onBodyChange?: (blockId: string, body: RichText) => void;
+  onContentChange?: (blockId: string, patch: Partial<Block>) => void;
   onBlockContextMenu?: (e: ReactMouseEvent, blockId: string, fieldId: string | null) => void;
   onSurfaceContextMenu?: (e: ReactMouseEvent) => void;
   onBackgroundPointerDown?: () => void;
@@ -41,7 +41,7 @@ export const PageSurface = forwardRef<HTMLDivElement, {
     onSpanClick,
     onEnteredField,
     onStartEdit,
-    onBodyChange,
+    onContentChange,
     onBlockContextMenu,
     onSurfaceContextMenu,
     onBackgroundPointerDown,
@@ -118,6 +118,7 @@ export const PageSurface = forwardRef<HTMLDivElement, {
         <BlockFrame
           key={block.id}
           block={block}
+          pageId={page.id}
           cols={cols}
           rows={rows}
           selected={selection.includes(block.id)}
@@ -129,7 +130,7 @@ export const PageSurface = forwardRef<HTMLDivElement, {
           onSpanClick={onSpanClick}
           onEnteredField={onEnteredField}
           onStartEdit={onStartEdit}
-          onBodyChange={onBodyChange}
+          onContentChange={onContentChange}
           onContextMenu={onBlockContextMenu}
         />
       ))}

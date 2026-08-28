@@ -41,8 +41,8 @@ export function VersionPanel() {
       <h3>Versions</h3>
       {versions.length === 0 && (
         <p className="muted text-xs">
-          No versions yet. <strong>Finalize</strong> writes an immutable snapshot and releases the
-          lock.
+          No versions yet. <strong>Dispatch</strong> writes an immutable snapshot, releases the
+          lock and pushes the shared content to the adaptations that follow this document.
         </p>
       )}
       {versions.map((v) => {

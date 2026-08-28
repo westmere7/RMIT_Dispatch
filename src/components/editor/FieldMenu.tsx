@@ -1,6 +1,6 @@
 import { useFieldOps } from '../../editor/useFieldOps';
 import { useWorkspace } from '../../editor/workspaceContext';
-import type { TextRange } from '../../lib/richtext';
+import { wholeTextRange, type TextRange } from '../../lib/richtext';
 import type { FieldTarget } from '../../lib/fieldtypes';
 import type { RichText } from '../../types';
 import { IconLink, IconPlus } from '../Icons';
@@ -29,6 +29,16 @@ export function FieldMenu({
   const { fields } = useWorkspace();
   const { bindRange, insertField } = useFieldOps();
 
+  /**
+   * Binding falls back to the block's whole text when nothing is
+   * selected — the same rule as the canvas menu, so selecting a block
+   * and selecting its text lead to the same place from either entry.
+   */
+  const bindTarget = () => {
+    const range = getRange();
+    return range && range.start !== range.end ? range : wholeTextRange(rich);
+  };
+
   return (
     <>
       <FieldPicker
@@ -39,10 +49,10 @@ export function FieldMenu({
         compact={compact}
         createLabel="New field from selection"
         onCreate={() => {
-          void bindRange(rich, getRange()).then((next) => next && onRich(next));
+          void bindRange(rich, bindTarget()).then((next) => next && onRich(next));
         }}
         onPick={(f) => {
-          void bindRange(rich, getRange(), { fieldId: f.id }).then((next) => next && onRich(next));
+          void bindRange(rich, bindTarget(), { fieldId: f.id }).then((next) => next && onRich(next));
         }}
       />
       <FieldPicker

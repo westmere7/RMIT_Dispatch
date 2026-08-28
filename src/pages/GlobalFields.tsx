@@ -13,6 +13,7 @@ import {
   IconPlus,
   IconSearch,
   IconTrash,
+  IconX,
 } from '../components/Icons';
 import { buildFolderTree, matchesQuery, normalizeFolder, type FolderNode } from '../lib/fieldtree';
 import { fieldShapeLabel } from '../lib/fieldtypes';
@@ -22,15 +23,118 @@ import {
   createField,
   deleteField,
   fetchAllSpaceFields,
+  fetchFieldUsage,
   fetchProjectTitles,
   renameFolder,
   setFieldFolder,
   setFieldScope,
+  type FieldUse,
 } from '../store/fields';
 import { deleteMediaMany } from '../store/media';
 import { valueMediaPaths } from '../lib/syncfields';
 import { useSpaces } from '../store/spaces';
+import { Link } from 'react-router-dom';
 import type { SyncField } from '../types';
+
+/**
+ * How many projects actually EMBED this field, and a way into them.
+ *
+ * The column used to say where a field COULD be used — "all projects"
+ * for every global one, which is the same answer for most of the table
+ * and tells nobody anything. What an editor needs before renaming or
+ * deleting is where it IS used.
+ */
+function UsedIn({
+  field,
+  uses,
+  loading,
+  onOpen,
+}: {
+  field: SyncField;
+  uses: FieldUse[] | undefined;
+  loading: boolean;
+  onOpen: () => void;
+}) {
+  if (loading) return <span className="gf-use muted">…</span>;
+  const count = uses?.length ?? 0;
+  if (count === 0) {
+    return (
+      <span
+        className="gf-use is-unused"
+        title={
+          field.scope === 'global'
+            ? 'Available to every project, but embedded in none of them yet'
+            : 'Not embedded in any document yet'
+        }
+      >
+        Not used
+      </span>
+    );
+  }
+  const docs = uses!.reduce((n, u) => n + u.documents.length, 0);
+  return (
+    <button
+      className="gf-use is-used"
+      onClick={onOpen}
+      title={`Used in ${docs} document(s) — click for the list`}
+    >
+      {count} project{count === 1 ? '' : 's'}
+    </button>
+  );
+}
+
+/** The projects and documents embedding one field. */
+function UsagePanel({
+  field,
+  uses,
+  onClose,
+}: {
+  field: SyncField;
+  uses: FieldUse[];
+  onClose: () => void;
+}) {
+  const docs = uses.reduce((n, u) => n + u.documents.length, 0);
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 460 }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 4,
+          }}
+        >
+          <h2>{field.name}</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            <IconX />
+          </button>
+        </div>
+        <p className="muted text-xs" style={{ marginBottom: 14 }}>
+          Embedded in {docs} document{docs === 1 ? '' : 's'} across {uses.length} project
+          {uses.length === 1 ? '' : 's'}. Editing the field updates every one of them.
+        </p>
+
+        <div className="gf-use-list">
+          {uses.map((u) => (
+            <div key={u.projectId} className="gf-use-project">
+              <Link to={`/projects/${u.projectId}`} className="gf-use-title" onClick={onClose}>
+                {u.projectTitle}
+              </Link>
+              <div className="gf-use-docs">
+                {u.documents.map((d) => (
+                  <Link key={d.id} to={`/docs/${d.id}`} className="gf-use-doc" onClick={onClose}>
+                    {d.title}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 type ScopeFilter = 'global' | 'local' | 'all';
 
@@ -69,6 +173,13 @@ export function GlobalFields() {
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('global');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<SyncField | null>(null);
+  /**
+   * Where each field is embedded. Loaded AFTER the fields, because it
+   * reads every draft in the space — the table should not wait on it.
+   */
+  const [usage, setUsage] = useState<Map<string, FieldUse[]> | null>(null);
+  /** The field whose project list is open. */
+  const [usageFor, setUsageFor] = useState<SyncField | null>(null);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => setCrumbs(['Sync fields']), [setCrumbs]);
@@ -88,6 +199,14 @@ export function GlobalFields() {
       ]);
       setFields(all);
       setTitles(t);
+      setUsage(null);
+      // Not awaited: the counts fill in when they arrive.
+      void fetchFieldUsage(currentSpace.id)
+        .then(setUsage)
+        .catch((e) => {
+          console.error('field usage failed', e);
+          setUsage(new Map());
+        });
     } catch (e) {
       setLoadError(isMissingColumn(e) ? MIGRATION_HINT : (e as Error).message);
       setFields([]);
@@ -200,13 +319,16 @@ export function GlobalFields() {
 
   return (
     <div className="content-pad">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-        <div style={{ flex: 1 }}>
-          <h2>Sync fields</h2>
-          <div className="muted text-xs">
-            {currentSpace.name} · {globalCount} global, {fields.length - globalCount} project-local
-          </div>
+      {/* Scope and the create button sit with the heading, not adrift on
+          the far side of a full-width table — at this width the eye has
+          to travel the whole page to find them. */}
+      <div style={{ marginBottom: 6 }}>
+        <h2>Sync fields</h2>
+        <div className="muted text-xs">
+          {currentSpace.name} · {globalCount} global, {fields.length - globalCount} project-local
         </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <div className="segmented">
           {(['global', 'local', 'all'] as ScopeFilter[]).map((s) => (
             <button
@@ -225,7 +347,7 @@ export function GlobalFields() {
         )}
       </div>
 
-      <p className="muted text-xs" style={{ marginBottom: 16, maxWidth: 900 }}>
+      <p className="muted text-xs" style={{ marginBottom: 14, maxWidth: 900 }}>
         Global fields are shared by every project in the space — edit one here and every document
         that embeds it updates. Field values hold plain content: styling comes from the block that
         embeds them, while a table field keeps its own row and column structure.
@@ -270,7 +392,7 @@ export function GlobalFields() {
               <span role="columnheader">Field</span>
               <span role="columnheader">Type</span>
               <span role="columnheader">Value</span>
-              <span role="columnheader">Available in</span>
+              <span role="columnheader" title="Projects that embed this field">Used in</span>
               <span role="columnheader" className="gf-when">Updated</span>
               <span role="columnheader" className="gf-col-actions">
                 {canEdit ? 'Actions' : ''}
@@ -342,9 +464,12 @@ export function GlobalFields() {
                     />
                   </span>
                   <span className="gf-home">
-                    {row.field.scope === 'global'
-                      ? 'all projects'
-                      : (titles.get(row.field.projectId ?? '') ?? 'project')}
+                    <UsedIn
+                      field={row.field}
+                      uses={usage?.get(row.field.id)}
+                      loading={usage === null}
+                      onOpen={() => setUsageFor(row.field)}
+                    />
                   </span>
                   <span className="gf-when" title={new Date(row.field.updatedAt).toLocaleString()}>
                     {relativeTime(row.field.updatedAt)}
@@ -396,6 +521,14 @@ export function GlobalFields() {
           </div>
         )}
       </div>
+
+      {usageFor && (
+        <UsagePanel
+          field={usageFor}
+          uses={usage?.get(usageFor.id) ?? []}
+          onClose={() => setUsageFor(null)}
+        />
+      )}
 
       {creating && (
         <NewFieldDialog

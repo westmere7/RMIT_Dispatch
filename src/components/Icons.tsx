@@ -202,6 +202,13 @@ export const IconArrowUpDown = (p: P) => (
     <path d="M7 4v16" />
   </I>
 );
+/* The app's namesake action: send this document's content onward. */
+export const IconDispatch = (p: P) => (
+  <I {...p}>
+    <path d="M22 2 11 13" />
+    <path d="M22 2 15 22 11 13 2 9z" />
+  </I>
+);
 export const IconCheck = (p: P) => (
   <I {...p}>
     <path d="M20 6 9 17l-5-5" />
